@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { ReceiptText } from 'lucide-react';
+import { ChevronRight, PiggyBank, ReceiptText } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { formatMoney, type SummaryDTO } from '@ffos/shared';
@@ -9,7 +9,8 @@ import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, EmptyState, ErrorBanner, SectionTitle, Spinner } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { currentMonth } from '../lib/format.ts';
+import { lineStatus, statusBar, useBudget, usedPct } from '../lib/budget.ts';
+import { currentMonth, monthLabel } from '../lib/format.ts';
 
 export function HomePage() {
   const { book, can } = useCurrentBook();
@@ -37,6 +38,7 @@ export function HomePage() {
       ) : (
         <>
           <SummaryCard income={s.income} expense={s.expense} net={s.net} money={money} />
+          <BudgetSnapshot month={month} />
 
           {s.count === 0 ? (
             <Card>
@@ -140,5 +142,74 @@ function SummaryCard({ income, expense, net, money }: { income: number; expense:
         </div>
       </dl>
     </Card>
+  );
+}
+
+/** Budget at a glance: savings on track, and the heads closest to (or over) their limit. */
+function BudgetSnapshot({ month }: { month: string }) {
+  const { book, can } = useCurrentBook();
+  const budget = useBudget(book.id, month);
+  const categories = useCategories(book.id);
+  const b = budget.data;
+  if (!b) return null;
+  const href = month === currentMonth() ? '/budget' : `/budget?month=${month}`;
+  const money = (n: number) => formatMoney(n, book.currency);
+
+  if (!b.exists) {
+    if (!can('budget.manage')) return null;
+    return (
+      <Link to={`/budget/${month}/edit`} className="block">
+        <Card className="flex items-center gap-3 p-4 hover:bg-subtle/60">
+          <PiggyBank className="size-5 shrink-0 text-muted" strokeWidth={1.75} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-medium">Plan {monthLabel(month).split(' ')[0]}'s budget</span>
+            <span className="block text-[13px] text-muted">Split your income into heads and see what you save.</span>
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-muted" />
+        </Card>
+      </Link>
+    );
+  }
+
+  const byId = new Map((categories.data ?? []).map((c) => [c.id, c]));
+  const watch = [...b.lines]
+    .filter((l) => l.planned > 0 || l.spent > 0)
+    .sort((x, y) => usedPct(y) - usedPct(x) || y.spent - x.spent)
+    .slice(0, 3);
+  const savings = b.totals.projectedSavings;
+
+  return (
+    <Link to={href} className="block">
+      <Card className="p-4 hover:bg-subtle/40">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[13px] font-medium text-muted">Budget · {monthLabel(month).split(' ')[0]}</p>
+          <ChevronRight className="size-4 text-muted" />
+        </div>
+        <p className="mt-1 text-sm">
+          {savings >= 0 ? 'On track to save ' : 'Heading for a shortfall of '}
+          <strong className={`font-semibold tabular ${savings < 0 ? 'text-negative' : 'text-positive'}`}>{money(Math.abs(savings))}</strong>
+        </p>
+        {watch.length > 0 && (
+          <div className="mt-3 space-y-2.5">
+            {watch.map((l) => {
+              const status = lineStatus(l);
+              return (
+                <div key={l.categoryId}>
+                  <div className="flex justify-between gap-2 text-[13px]">
+                    <span className="truncate">{byId.get(l.categoryId)?.name ?? 'Unknown'}</span>
+                    <span className={`shrink-0 tabular ${status === 'over' ? 'text-negative' : 'text-muted'}`}>
+                      {l.remaining < 0 ? `${money(-l.remaining)} over` : `${money(l.remaining)} left`}
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-subtle">
+                    <div className={`h-full rounded-full ${statusBar[status]}`} style={{ width: `${usedPct(l)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </Link>
   );
 }

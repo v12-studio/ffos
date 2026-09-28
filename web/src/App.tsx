@@ -1,10 +1,14 @@
 import { WifiOff } from 'lucide-react';
 import { Navigate, Outlet, Route, Routes } from 'react-router';
+import { AppLockProvider } from './components/AppLock.tsx';
 import { AppShell } from './components/AppShell.tsx';
 import { Button, ErrorBanner, FullScreenSpinner } from './components/ui.tsx';
 import { useAuth } from './lib/auth.tsx';
 import { BookProvider, useBook } from './lib/book.tsx';
 import { LoginPage, RecoverPage, RecoveryCodesScreen, SetupPage } from './pages/AuthPages.tsx';
+import { BudgetEditPage } from './pages/BudgetEditPage.tsx';
+import { BudgetPage } from './pages/BudgetPage.tsx';
+import { DeletedPage } from './pages/DeletedPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { InvitePage } from './pages/InvitePage.tsx';
 import { MembersPage } from './pages/MembersPage.tsx';
@@ -49,20 +53,25 @@ export function App() {
   if (recoveryCodes) return <RecoveryCodesScreen codes={recoveryCodes} onDone={dismissRecoveryCodes} />;
 
   return (
-    <BookProvider>
-      <Routes>
-        <Route path="/invite/:token" element={<InvitePage />} />
-        <Route element={<BookGate />}>
-          <Route element={<AppShell />}>
-            <Route index element={<HomePage />} />
-            <Route path="transactions" element={<TransactionsPage />} />
-            <Route path="members" element={<MembersPage />} />
-            <Route path="more" element={<MorePage />} />
+    <AppLockProvider>
+      <BookProvider>
+        <Routes>
+          <Route path="/invite/:token" element={<InvitePage />} />
+          <Route element={<BookGate />}>
+            <Route element={<AppShell />}>
+              <Route index element={<HomePage />} />
+              <Route path="transactions" element={<TransactionsPage />} />
+              <Route path="transactions/deleted" element={<DeletedPage />} />
+              <Route path="budget" element={<BudgetPage />} />
+              <Route path="budget/:month/edit" element={<BudgetEditPage />} />
+              <Route path="members" element={<MembersPage />} />
+              <Route path="more" element={<MorePage />} />
+            </Route>
           </Route>
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </BookProvider>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BookProvider>
+    </AppLockProvider>
   );
 }
 

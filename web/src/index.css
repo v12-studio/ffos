@@ -14,6 +14,7 @@
   --app-accent: #2d6a4f;
   --app-positive: #047857;
   --app-negative: #b42318;
+  --app-warning: #b54708;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,6 +30,7 @@
     --app-accent: #95d5b2;
     --app-positive: #34d399;
     --app-negative: #f87171;
+    --app-warning: #fbbf24;
   }
 }
 
@@ -44,6 +46,7 @@
   --color-accent: var(--app-accent);
   --color-positive: var(--app-positive);
   --color-negative: var(--app-negative);
+  --color-warning: var(--app-warning);
 }
 
 @theme {
@@ -69,6 +72,22 @@
   :focus-visible {
     outline: 2px solid var(--app-accent);
     outline-offset: 2px;
+  }
+}
+
+/* Wrong-PIN feedback on the lock screen */
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20%,
+  60% {
+    transform: translateX(-8px);
+  }
+  40%,
+  80% {
+    transform: translateX(8px);
   }
 }
 

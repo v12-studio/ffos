@@ -74,8 +74,19 @@ export interface ActivityDoc {
   _id?: ObjectId;
   bookId: ObjectId;
   userId: ObjectId;
-  action: 'create' | 'update' | 'delete' | 'role_change' | 'join' | 'leave' | 'remove' | 'transfer' | 'settings';
-  entity: 'transaction' | 'category' | 'member' | 'book';
+  action:
+    | 'create'
+    | 'update'
+    | 'delete'
+    | 'restore'
+    | 'export'
+    | 'role_change'
+    | 'join'
+    | 'leave'
+    | 'remove'
+    | 'transfer'
+    | 'settings';
+  entity: 'transaction' | 'category' | 'member' | 'book' | 'budget';
   entityId: ObjectId;
   summary: string;
   diff?: Record<string, { from: unknown; to: unknown }>;
@@ -107,6 +118,22 @@ export interface TransactionDoc extends BookScoped {
   date: string;
   categoryId: ObjectId;
   note: string;
+  /** Set on delete; a TTL index removes the document permanently at this time unless restored. */
+  purgeAt?: Date;
+}
+
+/** One month's plan for a book: expected income split into budget heads (expense categories). */
+export interface BudgetDoc {
+  _id: ObjectId;
+  bookId: ObjectId;
+  month: string; // YYYY-MM
+  income: number;
+  lines: { categoryId: ObjectId; planned: number }[];
+  version: number;
+  createdBy: ObjectId;
+  updatedBy: ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface MetaDoc {
@@ -153,6 +180,7 @@ export async function collections() {
     activity: db.collection<ActivityDoc>('activity'),
     categories: db.collection<CategoryDoc>('categories'),
     transactions: db.collection<TransactionDoc>('transactions'),
+    budgets: db.collection<BudgetDoc>('budgets'),
   };
 }
 
@@ -183,6 +211,13 @@ async function ensureIndexes(db: Db) {
     db.collection('transactions').createIndex({ bookId: 1, date: -1 }),
     db.collection('transactions').createIndex({ bookId: 1, categoryId: 1, date: -1 }),
     db.collection('transactions').createIndex({ bookId: 1, createdBy: 1, date: -1 }),
+    // "Recently deleted" list, and permanent removal once the restore window ends.
+    db.collection('transactions').createIndex(
+      { bookId: 1, deletedAt: -1 },
+      { partialFilterExpression: { deletedAt: { $type: 'date' } } },
+    ),
+    db.collection('transactions').createIndex({ purgeAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('budgets').createIndex({ bookId: 1, month: 1 }, { unique: true }),
   ];
   await Promise.all(ops);
 }

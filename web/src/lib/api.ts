@@ -83,7 +83,8 @@ export function refreshSession(): Promise<boolean> {
   return refreshInFlight;
 }
 
-export async function request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
+/** Sends an authenticated request, renewing the session once on 401. Throws ApiError on failure. */
+async function send(method: string, path: string, body?: unknown, retry = true): Promise<Response> {
   // Auth endpoints (login, setup…) answer 401 for bad credentials; never treat that as an expired session.
   const canRefresh = retry && !path.startsWith('/auth/') && readRefresh() !== null;
   if (!accessToken && canRefresh) await refreshSession();
@@ -103,22 +104,42 @@ export async function request<T>(method: string, path: string, body?: unknown, r
   }
 
   if (res.status === 401 && canRefresh) {
-    if (await refreshSession()) return request<T>(method, path, body, false);
+    if (await refreshSession()) return send(method, path, body, false);
     if (!readRefresh()) sessionEndedListeners.forEach((l) => l());
   }
 
-  if (res.status === 204) return undefined as T;
-  const data = await res.json().catch(() => null);
   if (!res.ok) {
+    const data = await res.json().catch(() => null);
     const err = (data as ApiErrorBody | null)?.error;
     throw new ApiError(res.status, err?.code ?? 'unknown', err?.message ?? `Request failed (${res.status})`, err?.fields);
   }
-  return data as T;
+  return res;
+}
+
+export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await send(method, path, body);
+  if (res.status === 204) return undefined as T;
+  return (await res.json().catch(() => null)) as T;
+}
+
+/** Downloads a file from the API and hands it to the browser as `filename`. */
+export async function download(path: string, filename: string) {
+  const blob = await (await send('GET', path)).blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  // Give mobile browsers time to start the download before releasing the blob.
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body ?? {}),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
+  put: <T>(path: string, body: unknown) => request<T>('PUT', path, body),
   del: <T = void>(path: string) => request<T>('DELETE', path),
 };

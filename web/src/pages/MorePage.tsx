@@ -1,15 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LogOut, Smartphone, X } from 'lucide-react';
+import { ChevronRight, LogOut, Smartphone, Users, X } from 'lucide-react';
 import { useState } from 'react';
+import { Link } from 'react-router';
 import type { SessionDTO, UserDTO } from '@ffos/shared';
+import { AppLockSettings } from '../components/AppLock.tsx';
 import { PageTitle } from '../components/AppShell.tsx';
 import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, SectionTitle } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
+import { useCurrentBook } from '../lib/book.tsx';
 import { relativeTime } from '../lib/format.ts';
 
 export function MorePage() {
   const { user, signOut } = useAuth();
+  const { book } = useCurrentBook();
   return (
     <div className="space-y-6">
       <PageTitle>Settings</PageTitle>
@@ -23,6 +27,21 @@ export function MorePage() {
           </p>
         </div>
       </Card>
+      {/* On phones Members isn't in the tab bar; desktop has it in the sidebar. */}
+      <Link to="/members" className="block lg:hidden">
+        <Card className="flex min-h-14 items-center gap-3 px-4 py-3 hover:bg-subtle/60">
+          <Users className="size-5 shrink-0 text-muted" strokeWidth={1.75} />
+          <span className="min-w-0 flex-1">
+            <span className="block text-[15px] font-medium">Members & sharing</span>
+            <span className="block truncate text-[13px] text-muted">
+              {book.isPersonal ? 'Private book' : `${book.memberCount} member${book.memberCount === 1 ? '' : 's'}`} · invites,
+              roles, export
+            </span>
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-muted" />
+        </Card>
+      </Link>
+      <AppLockSettings />
       <ProfileForm />
       <PasswordForm />
       <Devices />

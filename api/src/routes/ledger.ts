@@ -1,13 +1,16 @@
 import { Hono } from 'hono';
 import { ObjectId } from 'mongodb';
 import {
+  can,
   canModifyRecord,
   categoryCreateSchema,
+  DELETED_RETENTION_DAYS,
   formatMoney,
   monthSchema,
   transactionCreateSchema,
   transactionUpdateSchema,
   type CategoryDTO,
+  type DeletedTransactionDTO,
   type SummaryDTO,
   type TransactionDTO,
 } from '@ffos/shared';
@@ -20,12 +23,21 @@ import { requirePermission } from '../middleware/book.ts';
 // Mounted under /books/:bookId after requireBook, so c.get('book') and c.get('role') are set.
 // Every query below filters by bookId.
 
-function monthRange(month: string) {
+export function monthRange(month: string) {
   return { $gte: `${month}-01`, $lte: `${month}-31` };
 }
 
 function currentMonth() {
   return new Date().toISOString().slice(0, 7);
+}
+
+/**
+ * Quote a CSV cell. Text starting with = + - @ is prefixed with ' so spreadsheet apps
+ * don't run a note like "=HYPERLINK(...)" as a formula.
+ */
+function csvCell(value: string): string {
+  const safe = /^[=+\-@\t\r]/.test(value) && !/^-?\d+(\.\d+)?$/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 function toCategoryDTO(c: CategoryDoc): CategoryDTO {
@@ -224,9 +236,17 @@ export const ledgerRoutes = new Hono<AppEnv>()
     if (!canModifyRecord(c.get('role'), 'delete', existing.createdBy.toHexString(), c.get('userId').toHexString())) {
       throw forbidden('You can only delete transactions you added');
     }
+    const now = new Date();
     await db.transactions.updateOne(
       { _id: id, bookId },
-      { $set: { deletedAt: new Date(), updatedBy: c.get('userId') }, $inc: { version: 1 } },
+      {
+        $set: {
+          deletedAt: now,
+          purgeAt: new Date(now.getTime() + DELETED_RETENTION_DAYS * 86_400_000),
+          updatedBy: c.get('userId'),
+        },
+        $inc: { version: 1 },
+      },
     );
     await logActivity(db, {
       bookId,
@@ -237,6 +257,136 @@ export const ledgerRoutes = new Hono<AppEnv>()
       summary: `deleted ${existing.type} of ${formatMoney(existing.amount, c.get('book').currency)} dated ${existing.date}`,
     });
     return c.body(null, 204);
+  })
+
+  // Recently deleted: editors+ see everything; contributors see only their own entries.
+  .get('/transactions/deleted', async (c) => {
+    const role = c.get('role');
+    if (!can(role, 'txn.delete.own')) throw forbidden();
+    const db = c.get('db');
+    const rows = await db.transactions
+      .find({
+        bookId: c.get('book')._id,
+        deletedAt: { $exists: true },
+        ...(can(role, 'txn.delete.any') ? {} : { createdBy: c.get('userId') }),
+      })
+      .sort({ deletedAt: -1 })
+      .limit(500)
+      .toArray();
+    const [dtos, deleters] = await Promise.all([
+      toTransactionDTOs(db, rows),
+      userNames(db, rows.map((r) => r.updatedBy)),
+    ]);
+    const result: DeletedTransactionDTO[] = dtos.map((dto, i) => {
+      const row = rows[i]!;
+      return {
+        ...dto,
+        deletedAt: row.deletedAt!.toISOString(),
+        deletedByName: deleters.get(row.updatedBy.toHexString()) ?? 'Former member',
+        purgeAt: (row.purgeAt ?? new Date(row.deletedAt!.getTime() + DELETED_RETENTION_DAYS * 86_400_000)).toISOString(),
+      };
+    });
+    return c.json(result);
+  })
+
+  .post('/transactions/:id/restore', async (c) => {
+    const db = c.get('db');
+    const bookId = c.get('book')._id;
+    const id = oid(c.req.param('id'));
+    const existing = await db.transactions.findOne({ _id: id, bookId, deletedAt: { $exists: true } });
+    if (!existing) throw notFound('This transaction is no longer in Recently deleted');
+    if (!canModifyRecord(c.get('role'), 'delete', existing.createdBy.toHexString(), c.get('userId').toHexString())) {
+      throw forbidden('You can only restore transactions you added');
+    }
+    const restored = await db.transactions.findOneAndUpdate(
+      { _id: id, bookId, deletedAt: { $exists: true } },
+      {
+        $unset: { deletedAt: '', purgeAt: '' },
+        $set: { updatedBy: c.get('userId'), updatedAt: new Date() },
+        $inc: { version: 1 },
+      },
+      { returnDocument: 'after' },
+    );
+    if (!restored) throw notFound('This transaction is no longer in Recently deleted');
+    await logActivity(db, {
+      bookId,
+      userId: c.get('userId'),
+      action: 'restore',
+      entity: 'transaction',
+      entityId: id,
+      summary: `restored ${existing.type} of ${formatMoney(existing.amount, c.get('book').currency)} dated ${existing.date}`,
+    });
+    const [dto] = await toTransactionDTOs(db, [restored]);
+    return c.json(dto);
+  })
+
+  // ── export ──
+  // ?format=csv (transactions, for spreadsheets) or json (full book backup). Phone numbers are never included.
+  .get('/export', requirePermission('book.export'), async (c) => {
+    const format = c.req.query('format') === 'csv' ? 'csv' : 'json';
+    const db = c.get('db');
+    const book = c.get('book');
+    const [categories, transactions, members] = await Promise.all([
+      db.categories.find({ bookId: book._id }).sort({ kind: 1, sort: 1 }).toArray(),
+      db.transactions.find({ bookId: book._id, deletedAt: { $exists: false } }).sort({ date: 1, createdAt: 1 }).toArray(),
+      db.bookMembers.find({ bookId: book._id }).toArray(),
+    ]);
+    const names = await userNames(db, [...members.map((m) => m.userId), ...transactions.map((t) => t.createdBy)]);
+    const categoryName = new Map(categories.map((cat) => [cat._id.toHexString(), cat.name]));
+    const nameOf = (id: ObjectId) => names.get(id.toHexString()) ?? 'Former member';
+
+    await logActivity(db, {
+      bookId: book._id,
+      userId: c.get('userId'),
+      action: 'export',
+      entity: 'book',
+      entityId: book._id,
+      summary: `exported the book (${format.toUpperCase()}, ${transactions.length} transactions)`,
+    });
+
+    if (format === 'csv') {
+      const header = ['Date', 'Type', 'Category', 'Amount', 'Currency', 'Note', 'Added by', 'Added at'];
+      const lines = transactions.map((t) =>
+        [
+          t.date,
+          t.type,
+          categoryName.get(t.categoryId.toHexString()) ?? '',
+          (t.amount / 100).toFixed(2),
+          book.currency,
+          t.note,
+          nameOf(t.createdBy),
+          t.createdAt.toISOString(),
+        ]
+          .map(csvCell)
+          .join(','),
+      );
+      // BOM so Excel opens UTF-8 (₹, non-English names) correctly.
+      const csv = `﻿${[header.join(','), ...lines].join('\r\n')}\r\n`;
+      return c.body(csv, 200, { 'content-type': 'text/csv; charset=utf-8' });
+    }
+
+    return c.json({
+      format: 'ffos-book-export',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      exportedBy: c.get('user').name,
+      book: { name: book.name, currency: book.currency, createdAt: book.createdAt.toISOString() },
+      members: members.map((m) => ({ name: nameOf(m.userId), role: m.role, joinedAt: m.joinedAt.toISOString() })),
+      categories: categories.map((cat) => ({ ...toCategoryDTO(cat), archived: cat.archived })),
+      transactions: transactions.map((t) => ({
+        id: t._id.toHexString(),
+        date: t.date,
+        type: t.type,
+        amountMinor: t.amount,
+        amount: (t.amount / 100).toFixed(2),
+        categoryId: t.categoryId.toHexString(),
+        category: categoryName.get(t.categoryId.toHexString()) ?? null,
+        note: t.note,
+        addedBy: nameOf(t.createdBy),
+        createdAt: t.createdAt.toISOString(),
+        updatedAt: t.updatedAt.toISOString(),
+      })),
+    });
   })
 
   // ── dashboard summary ──

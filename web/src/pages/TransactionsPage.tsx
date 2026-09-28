@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { ReceiptText, Search } from 'lucide-react';
+import { ReceiptText, Search, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router';
 import { formatMoney, type TransactionDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow } from '../components/AppShell.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
@@ -13,7 +14,7 @@ import { currentMonth, dayLabel } from '../lib/format.ts';
 type Filter = 'all' | 'expense' | 'income' | 'mine';
 
 export function TransactionsPage() {
-  const { book } = useCurrentBook();
+  const { book, can } = useCurrentBook();
   const { user } = useAuth();
   const [month, setMonth] = useState(currentMonth);
   const [filter, setFilter] = useState<Filter>('all');
@@ -105,6 +106,15 @@ export function TransactionsPage() {
             </section>
           );
         })
+      )}
+
+      {can('txn.delete.own') && (
+        <Link
+          to="/transactions/deleted"
+          className="flex min-h-11 items-center justify-center gap-2 rounded-lg text-sm font-medium text-muted hover:bg-subtle hover:text-ink"
+        >
+          <Trash2 className="size-4" /> Recently deleted
+        </Link>
       )}
     </div>
   );

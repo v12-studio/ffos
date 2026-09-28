@@ -21,6 +21,7 @@ import { badRequest, forbidden, notFound, oid, parse } from '../lib/errors.ts';
 import { randomToken, sha256 } from '../lib/tokens.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { requireBook, requirePermission } from '../middleware/book.ts';
+import { budgetRoutes } from './budget.ts';
 import { ledgerRoutes } from './ledger.ts';
 
 function maskPhone(phone: string) {
@@ -259,7 +260,8 @@ const bookRoutes = new Hono<AppEnv>()
     return c.json(result);
   })
 
-  .route('/', ledgerRoutes);
+  .route('/', ledgerRoutes)
+  .route('/', budgetRoutes);
 
 function toInviteDTO(invite: InviteDoc, createdByName: string): InviteDTO {
   return {

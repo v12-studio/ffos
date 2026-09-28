@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, House, List, Plus, Settings, Users } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, House, List, PiggyBank, Plus, Settings, Users } from 'lucide-react';
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { NavLink, Outlet } from 'react-router';
 import { formatMoney, type BookDTO, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
@@ -15,12 +15,14 @@ import { Button, ErrorBanner, Field, fieldErrors, RoleBadge, Sheet } from './ui.
 const TxnSheetContext = createContext<(t?: TransactionDTO) => void>(() => undefined);
 export const useOpenTransaction = () => useContext(TxnSheetContext);
 
+// Phone tab bar: 2 tabs · Add · 2 tabs. Members lives in Settings on phones and in the sidebar on desktop.
 const NAV = [
   { to: '/', label: 'Overview', icon: House, end: true },
   { to: '/transactions', label: 'Transactions', icon: List, end: false },
-  { to: '/members', label: 'Members', icon: Users, end: false },
+  { to: '/budget', label: 'Budget', icon: PiggyBank, end: false },
   { to: '/more', label: 'Settings', icon: Settings, end: false },
 ];
+const SIDEBAR_NAV = [...NAV.slice(0, 3), { to: '/members', label: 'Members', icon: Users, end: false }, NAV[3]!];
 
 export function AppShell() {
   const { book, can } = useCurrentBook();
@@ -52,7 +54,7 @@ export function AppShell() {
           </div>
           <div className="mb-4 rounded-lg border border-line">{bookSwitcher}</div>
           <nav className="flex flex-col gap-0.5">
-            {NAV.map(({ to, label, icon: Icon, end }) => (
+            {SIDEBAR_NAV.map(({ to, label, icon: Icon, end }) => (
               <NavLink
                 key={to}
                 to={to}

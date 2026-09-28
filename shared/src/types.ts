@@ -83,6 +83,49 @@ export interface TransactionDTO {
   version: number;
 }
 
+/** Deleted transactions stay restorable for this long, then are removed permanently. */
+export const DELETED_RETENTION_DAYS = 30;
+
+export interface DeletedTransactionDTO extends TransactionDTO {
+  deletedAt: string;
+  deletedByName: string;
+  /** When it will be removed permanently. */
+  purgeAt: string;
+}
+
+export interface BudgetLineDTO {
+  categoryId: string;
+  planned: number;
+  spent: number;
+  /** planned − spent; negative when over budget. */
+  remaining: number;
+}
+
+/**
+ * One month's plan and how it's going. All amounts are minor units.
+ * "Planned savings" is income left unallocated; "projected savings" is what's left if every
+ * head ends exactly at its limit (or where it already is, if over) and no more unbudgeted spending happens.
+ */
+export interface BudgetDTO {
+  month: string;
+  /** false when nothing has been planned for this month yet (lines/income are empty). */
+  exists: boolean;
+  version: number;
+  income: number;
+  lines: BudgetLineDTO[];
+  /** Expenses this month in categories that have no budget head. */
+  unbudgeted: { categoryId: string; spent: number }[];
+  totals: {
+    allocated: number;
+    plannedSavings: number;
+    spent: number;
+    overspent: number;
+    projectedSavings: number;
+    /** Income transactions actually recorded this month, for comparison with the plan. */
+    incomeReceived: number;
+  };
+}
+
 export interface SummaryDTO {
   month: string;
   income: number;

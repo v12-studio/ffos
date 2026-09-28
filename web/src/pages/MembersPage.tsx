@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Crown, History, Lock, LogOut, Share2, Trash2, UserPlus, X } from 'lucide-react';
+import { Check, Copy, Crown, FileJson, FileSpreadsheet, History, Lock, LogOut, Share2, Trash2, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   ASSIGNABLE_ROLES,
@@ -14,11 +14,12 @@ import {
 } from '@ffos/shared';
 import { PageTitle } from '../components/AppShell.tsx';
 import { PhoneField } from '../components/auth-ui.tsx';
+import { useToast } from '../components/Toast.tsx';
 import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
-import { api } from '../lib/api.ts';
+import { api, download } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { relativeTime } from '../lib/format.ts';
+import { relativeTime, todayISO } from '../lib/format.ts';
 
 export function MembersPage() {
   const { book, can } = useCurrentBook();
@@ -98,6 +99,7 @@ export function MembersPage() {
 
       {canInvite && <PendingInvites />}
       {can('activity.view') && <ActivityFeed />}
+      {can('book.export') && <ExportBook />}
       <BookSettings />
 
       <InviteSheet open={inviteOpen} onClose={() => setInviteOpen(false)} />
@@ -345,6 +347,38 @@ function ActivityFeed() {
             {expanded ? 'Show less' : `Show all ${rows.length}`}
           </button>
         )}
+      </Card>
+    </section>
+  );
+}
+
+function ExportBook() {
+  const { book } = useCurrentBook();
+  const toast = useToast();
+  const exporter = useMutation({
+    mutationFn: (format: 'csv' | 'json') => {
+      const slug = book.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'book';
+      return download(`/books/${book.id}/export?format=${format}`, `ffos-${slug}-${todayISO()}.${format}`);
+    },
+    onSuccess: (_, format) => toast({ message: `${format === 'csv' ? 'Spreadsheet' : 'Backup'} downloaded`, duration: 2500 }),
+  });
+
+  return (
+    <section>
+      <SectionTitle>Export</SectionTitle>
+      <Card className="space-y-3 p-4">
+        <p className="text-sm text-muted">
+          Download this book's transactions. Deleted items and phone numbers are not included.
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Button variant="secondary" loading={exporter.isPending && exporter.variables === 'csv'} disabled={exporter.isPending} onClick={() => exporter.mutate('csv')}>
+            <FileSpreadsheet className="size-4" /> Spreadsheet (CSV)
+          </Button>
+          <Button variant="secondary" loading={exporter.isPending && exporter.variables === 'json'} disabled={exporter.isPending} onClick={() => exporter.mutate('json')}>
+            <FileJson className="size-4" /> Full backup (JSON)
+          </Button>
+        </div>
+        <ErrorBanner error={exporter.error} />
       </Card>
     </section>
   );

@@ -299,9 +299,16 @@ runs in CI against an in-memory MongoDB (`mongodb-memory-server`).
 - PWA: manifest, icons, offline app shell, installable; responsive phone/desktop layouts, dark mode
 - Tests: 29 API tests covering auth, invites, book isolation and the role matrix
 
+**Protection — implemented (2026-09-28)**
+- Export book: CSV (spreadsheet, formula-safe, Excel-friendly UTF-8) and full JSON backup; owner/admin/editor; no phone numbers
+- Undo toast after delete (no confirm dialog) + Recently deleted screen; restore within 30 days, then a TTL index purges
+  permanently; contributors see/restore only their own
+- App lock per device: 4–6 digit PIN (PBKDF2, never sent to server) + optional fingerprint/Face ID/Windows Hello via
+  WebAuthn platform authenticator; locks on open and after a chosen time away; backoff after 5 wrong PINs, sign-out after 10
+
 **Next (core features, after review)**
 - Accounts & transfers, member labels, custom categories UI
 - Recurring items, commitments/EMIs, cash-flow forecast
 - Budgets, reports & charts, export/import
-- Restore deleted items, app lock (PIN/passkey), offline add queue
+- Offline add queue
 

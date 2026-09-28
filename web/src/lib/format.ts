@@ -1,3 +1,20 @@
+/** "₹" for INR, "$" for USD… falls back to the code. */
+export function currencySymbol(currency: string): string {
+  try {
+    return (
+      new Intl.NumberFormat('en-IN', { style: 'currency', currency }).formatToParts(0).find((p) => p.type === 'currency')?.value ??
+      currency
+    );
+  } catch {
+    return currency;
+  }
+}
+
+/** Minor units → plain editable text ("12000", "450.5"). */
+export function minorToInput(minor: number): string {
+  return minor ? String(minor / 100) : '';
+}
+
 export function todayISO(): string {
   return new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
 }

@@ -19,7 +19,7 @@ export function createApp() {
     '*',
     cors({
       origin: (origin) => (env().corsOrigins.includes(origin) ? origin : null),
-      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'Authorization'],
       maxAge: 86_400,
     }),

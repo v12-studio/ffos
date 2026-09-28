@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { AuthResponse, UserDTO } from '@ffos/shared';
 import { api, hasStoredSession, onSessionEnded, refreshSession, setTokens, storedRefreshToken } from './api.ts';
+import { clearAllLocks } from './applock.ts';
 
 type Status = 'loading' | 'setup' | 'signedOut' | 'signedIn' | 'offline';
 
@@ -59,6 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearLocal = useCallback(() => {
     setTokens(null);
+    clearAllLocks(); // the app lock belongs to the signed-in session on this device
     setUser(null);
     setStatus('signedOut');
     queryClient.clear();

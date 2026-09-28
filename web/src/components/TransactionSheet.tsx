@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Delete, Trash2 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { AlertTriangle, Delete, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { canModifyRecord, formatMoney, isCatchAllCategory, toMinor, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
 import { api, ApiError } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { todayISO } from '../lib/format.ts';
+import { useBudget } from '../lib/budget.ts';
+import { monthLabel, todayISO } from '../lib/format.ts';
 import { categoryIcon } from './CategoryIcon.tsx';
+import { useToast } from './Toast.tsx';
 import { Button, ErrorBanner, inputClass, Segmented, Sheet } from './ui.tsx';
 
 export function useCategories(bookId: string) {
@@ -40,6 +42,7 @@ export function TransactionSheet({
   const { book, can } = useCurrentBook();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const categories = useCategories(book.id);
 
   const [type, setType] = useState<'expense' | 'income'>('expense');
@@ -97,14 +100,33 @@ export function TransactionSheet({
     onSuccess: () => {
       invalidate();
       onClose();
+      if (type === 'expense' && budgetCheck?.inBudget && budgetCheck.leftAfter < 0) {
+        toast({ message: `${budgetCheck.name} is ${formatMoney(-budgetCheck.leftAfter, book.currency)} over budget` });
+      }
     },
   });
 
+  // No confirm dialog: deleting is instant and reversible from the toast or Recently deleted.
   const remove = useMutation({
-    mutationFn: () => api.del(`/books/${book.id}/transactions/${transaction!.id}`),
-    onSuccess: () => {
+    mutationFn: (id: string) => api.del(`/books/${book.id}/transactions/${id}`),
+    onSuccess: (_, id) => {
       invalidate();
       onClose();
+      toast({
+        message: 'Transaction deleted',
+        action: {
+          label: 'Undo',
+          onClick: async () => {
+            try {
+              await api.post(`/books/${book.id}/transactions/${id}/restore`);
+              toast({ message: 'Transaction restored', duration: 2500 });
+            } catch (err) {
+              toast({ message: err instanceof Error ? err.message : "Couldn't restore. Try Recently deleted." });
+            }
+            invalidate();
+          },
+        },
+      });
     },
   });
 
@@ -115,12 +137,31 @@ export function TransactionSheet({
   const canDelete = isEdit && canModifyRecord(book.role, 'delete', transaction!.createdBy, user!.id);
   const minor = toMinor(amount) ?? 0;
   // Keep "Other" at the end so categories added later sit before it.
-  const options = (categories.data ?? [])
-    .filter((c) => c.kind === type)
-    .sort((a, b) => Number(isCatchAllCategory(a)) - Number(isCatchAllCategory(b)));
+  const budgetMonth = date.slice(0, 7);
+  const budget = useBudget(book.id, budgetMonth, open && type === 'expense');
+  // This month's budget heads first (in plan order), then other categories, "Other" last.
+  const headOrder = new Map((budget.data?.lines ?? []).map((l, i) => [l.categoryId, i]));
+  const rank = (c: CategoryDTO) => (headOrder.has(c.id) ? headOrder.get(c.id)! : isCatchAllCategory(c) ? 10_000 : 1_000);
+  const options = (categories.data ?? []).filter((c) => c.kind === type).sort((a, b) => rank(a) - rank(b));
   const selectedCategory = options.find((c) => c.id === categoryId);
   const offerNewCategory = canSave && can('txn.create') && selectedCategory !== undefined && isCatchAllCategory(selectedCategory);
   const conflict = save.error instanceof ApiError && save.error.status === 409;
+
+  // Budget head for the chosen category in the transaction's month. Over-budget entries are
+  // allowed; the sheet only warns.
+  const budgetCheck = useMemo(() => {
+    if (!budget.data?.exists || !categoryId) return null;
+    const line = budget.data.lines.find((l) => l.categoryId === categoryId);
+    const name = selectedCategory?.name ?? 'This category';
+    if (!line) return { name, inBudget: false as const, monthName: monthLabel(budgetMonth) };
+    // When editing, the saved amount is already counted in `spent`; don't count it twice.
+    const alreadyCounted =
+      transaction && transaction.type === 'expense' && transaction.categoryId === categoryId && transaction.date.slice(0, 7) === budgetMonth
+        ? transaction.amount
+        : 0;
+    const leftBefore = line.planned - (line.spent - alreadyCounted);
+    return { name, inBudget: true as const, planned: line.planned, leftBefore, leftAfter: leftBefore - minor };
+  }, [budget.data, categoryId, selectedCategory?.name, budgetMonth, transaction, minor]);
 
   return (
     <Sheet
@@ -210,6 +251,8 @@ export function TransactionSheet({
           )}
         </div>
 
+        {canSave && type === 'expense' && budgetCheck && <BudgetHint check={budgetCheck} currency={book.currency} />}
+
         <div className="grid grid-cols-[auto_1fr] gap-2">
           <input
             type="date"
@@ -266,9 +309,7 @@ export function TransactionSheet({
               <Button
                 variant="danger"
                 loading={remove.isPending}
-                onClick={() => {
-                  if (confirm('Delete this transaction?')) remove.mutate();
-                }}
+                onClick={() => remove.mutate(transaction!.id)}
                 aria-label="Delete transaction"
               >
                 <Trash2 className="size-4" />
@@ -283,5 +324,43 @@ export function TransactionSheet({
         </div>
       </div>
     </Sheet>
+  );
+}
+
+type BudgetCheck =
+  | { name: string; inBudget: false; monthName: string }
+  | { name: string; inBudget: true; planned: number; leftBefore: number; leftAfter: number };
+
+/** "₹4,400 left in Food" — or a warning when this entry takes the head over its limit. */
+function BudgetHint({ check, currency }: { check: BudgetCheck; currency: string }) {
+  const money = (n: number) => formatMoney(n, currency);
+  if (!check.inBudget) {
+    return <p className="-mt-2 text-[13px] text-muted">{check.name} isn't a budget head in {check.monthName}.</p>;
+  }
+  if (check.leftAfter < 0) {
+    const alreadyOver = check.leftBefore <= 0;
+    return (
+      <div role="status" className="-mt-2 flex gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-[13px] text-warning">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+        <p>
+          <strong className="font-semibold">
+            {alreadyOver
+              ? `${check.name} is already ${money(-check.leftBefore)} over budget.`
+              : `This goes ${money(-check.leftAfter)} over your ${check.name} budget.`}
+          </strong>{' '}
+          {alreadyOver
+            ? ''
+            : check.leftBefore === check.planned
+              ? `Your ${check.name} limit is ${money(check.planned)}. `
+              : `Only ${money(check.leftBefore)} of ${money(check.planned)} was left. `}
+          You can still save it.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <p className="-mt-2 text-[13px] text-muted tabular">
+      {money(check.leftAfter)} left in {check.name} after this · limit {money(check.planned)}
+    </p>
   );
 }

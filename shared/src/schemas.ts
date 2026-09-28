@@ -121,6 +121,26 @@ export const transactionUpdateSchema = transactionCreateSchema.partial().extend(
   version: z.number().int().nonnegative(),
 });
 
+// ── budget ──
+/** Budget limits and income are minor units; zero is allowed (a head with no money yet). */
+const budgetAmountSchema = z.number().int('Amount must be in minor units').min(0).max(1_000_000_000_00, 'Amount is too large');
+
+export const budgetSaveSchema = z
+  .object({
+    income: budgetAmountSchema,
+    lines: z
+      .array(z.object({ categoryId: objectIdSchema, planned: budgetAmountSchema }))
+      .max(100, 'Too many budget heads'),
+    /** Version the client started from; omit when creating the month's first plan. */
+    version: z.number().int().nonnegative().optional(),
+  })
+  .refine((b) => new Set(b.lines.map((l) => l.categoryId)).size === b.lines.length, {
+    message: 'Each budget head can appear only once',
+    path: ['lines'],
+  });
+
+export const budgetCopySchema = z.object({ from: monthSchema });
+
 export type SetupInput = z.input<typeof setupSchema>;
 export type RegisterInput = z.input<typeof registerSchema>;
 export type LoginInput = z.input<typeof loginSchema>;
@@ -128,3 +148,4 @@ export type BookCreateInput = z.input<typeof bookCreateSchema>;
 export type InviteCreateInput = z.input<typeof inviteCreateSchema>;
 export type TransactionCreateInput = z.input<typeof transactionCreateSchema>;
 export type TransactionUpdateInput = z.input<typeof transactionUpdateSchema>;
+export type BudgetSaveInput = z.input<typeof budgetSaveSchema>;
