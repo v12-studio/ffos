@@ -2,7 +2,11 @@
   "name": "ffos",
   "private": true,
   "type": "module",
-  "workspaces": ["shared", "api", "web"],
+  "workspaces": [
+    "shared",
+    "api",
+    "web"
+  ],
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"npm run dev -w api\" \"npm run dev -w web\"",
     "build": "npm run build -w api && npm run build -w web",
@@ -13,5 +17,7 @@
     "concurrently": "^9.2.0",
     "typescript": "^5.9.2"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

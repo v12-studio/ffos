@@ -1,6 +1,7 @@
 node_modules/
 dist/
-.vercel/
+.netlify/
+api/netlify/functions/
 .env
 .env.local
 *.log

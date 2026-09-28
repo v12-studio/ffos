@@ -22,7 +22,11 @@ const MAX_FAILURES_PER_IP = 20;
 const FAILURE_WINDOW_MS = 15 * 60_000;
 
 function clientIp(c: Context<AppEnv>): string {
-  return c.req.header('x-forwarded-for')?.split(',')[0]?.trim() || c.req.header('x-real-ip') || 'unknown';
+  return (
+    c.req.header('x-nf-client-connection-ip') || // set by Netlify, can't be spoofed by the client
+    c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ||
+    'unknown'
+  );
 }
 
 async function assertNotRateLimited(db: Collections, phone: string, ip: string) {

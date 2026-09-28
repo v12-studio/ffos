@@ -1,0 +1,12 @@
+# The API runs as a Netlify Function; the web app is hosted on GitHub Pages.
+# Netlify site settings: Base directory = (empty), Package directory = api.
+# Paths below are relative to the repository root.
+[build]
+  command = "npm run build -w api"
+  publish = "api/netlify/public"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  directory = "api/netlify/functions"

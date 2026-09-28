@@ -5,7 +5,7 @@ See [PLAN.md](PLAN.md) for the full product plan.
 
 ```
 shared/  Zod schemas, types, role→permission map (used by both sides)
-api/     Hono API → Vercel serverless function, MongoDB driver
+api/     Hono API → Netlify Function, MongoDB driver
 web/     React + Vite + Tailwind PWA → GitHub Pages
 ```
 
@@ -34,20 +34,26 @@ npm run typecheck
 2. Network Access → allow `0.0.0.0/0` (serverless functions have no fixed IP).
 3. Copy the `mongodb+srv://…` connection string.
 
-### 2. API on Vercel (free Hobby)
-1. Import the GitHub repo in Vercel and set **Root Directory = `api`**.
-2. Environment variables:
+### 2. API on Netlify (free plan)
+1. Sign in to Netlify with GitHub → **Add new project → Import an existing project → GitHub** → pick the repo.
+2. Build settings (most are read from `api/netlify.toml`):
+   - Base directory: *(empty)*
+   - Package directory: `api`
+3. Environment variables (Project configuration → Environment variables):
    | Name | Value |
    |---|---|
    | `MONGODB_URI` | Atlas connection string |
    | `MONGODB_DB` | `ffos` |
    | `JWT_SECRET` | `node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"` |
    | `CORS_ORIGINS` | `https://<github-user>.github.io` |
-3. Deploy, then check `https://<project>.vercel.app/api/health` returns `{"ok":true}`.
+4. Deploy, then check `https://<project>.netlify.app/api/health` returns `{"ok":true}`.
+
+The build (`npm run build -w api`) bundles the API into `api/netlify/functions/api.mjs`, which Netlify deploys
+as a function serving `/api/*`.
 
 ### 3. Web on GitHub Pages
 1. Repo → Settings → Pages → Source: **GitHub Actions**.
-2. Repo → Settings → Secrets and variables → Actions → **Variables** → `VITE_API_URL` = your Vercel URL.
+2. Repo → Settings → Secrets and variables → Actions → **Variables** → `VITE_API_URL` = your Netlify URL.
 3. Push to `main`; `.github/workflows/deploy-web.yml` builds and publishes to
    `https://<github-user>.github.io/<repo>/`.
 4. On your phone, open that URL → browser menu → **Add to Home Screen / Install app**.

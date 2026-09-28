@@ -12,15 +12,16 @@ Mobile-first PWA for tracking income, expenses, and future commitments, organise
  GitHub Pages  ── static React app (no secrets)
         │
         ▼
- API: Vercel Serverless Functions (free Hobby tier, Node runtime)
-        │  MongoDB driver (connection string in Vercel env vars)
+ API: Netlify Functions (free plan, Node runtime)
+        │  MongoDB driver (connection string in Netlify env vars)
         ▼
  MongoDB Atlas M0 (512 MB)
 ```
 
 Why a separate API: GitHub Pages is static-only, and a MongoDB connection string in
 frontend code would be public. Atlas Data API (the old browser-friendly option) was retired
-in Sept 2025. Vercel functions run the official `mongodb` driver without workarounds.
+in Sept 2025. Netlify Functions run the official `mongodb` driver without workarounds.
+(Vercel was the first choice; switched to Netlify because Vercel sign-up needs a phone number the owner can't use.)
 RBAC also *must* be enforced server-side, so an API layer is required regardless.
 
 Atlas note: serverless IPs are dynamic, so Atlas network access must allow `0.0.0.0/0`;
@@ -41,9 +42,9 @@ Storage estimate: ~300 bytes per transaction + ~400 bytes per activity-log entry
 | Routing | React Router with `HashRouter` (GitHub Pages has no SPA rewrites) |
 | Forms/validation | React Hook Form + Zod (schemas shared with API) |
 | Charts | Recharts |
-| API | Hono on Vercel functions, `mongodb` driver, Zod, `jose` (JWT), `bcryptjs` |
+| API | Hono on Netlify Functions (pre-bundled with esbuild), `mongodb` driver, Zod, `jose` (JWT), `bcryptjs` |
 | Repo | Monorepo: `web/`, `api/`, `shared/` (Zod schemas, types, **role→permission map**) |
-| CI/CD | GitHub Actions → build `web/` → deploy to Pages; Vercel auto-deploys `api/` |
+| CI/CD | GitHub Actions → build `web/` → deploy to Pages; Netlify auto-deploys `api/` |
 
 ## 3. Users & authentication
 
@@ -262,7 +263,7 @@ GET /admin/users   PATCH /admin/users/:id (disable)   POST /admin/users/:id/rese
 
 | Phase | Scope |
 |---|---|
-| 0. Setup | Monorepo, Vite+React+TS+Tailwind, Hono API on Vercel, Atlas + indexes, Actions → Pages |
+| 0. Setup | Monorepo, Vite+React+TS+Tailwind, Hono API on Netlify, Atlas + indexes, Actions → Pages |
 | 1. Auth | Setup/login/refresh/logout, rate limiting, recovery codes, protected routes |
 | 2. Books & RBAC core | Books CRUD, membership, `shared/rbac.ts`, book-scoped middleware + repository helper, book switcher, Personal book on signup, RBAC tests |
 | 3. Core ledger | Accounts, categories (seeded per book), member labels, transactions CRUD with own/any rules, quick-add, dashboard |
@@ -282,13 +283,13 @@ runs in CI against an in-memory MongoDB (`mongodb-memory-server`).
 
 1. GitHub repo (Pages enabled via Actions)
 2. MongoDB Atlas M0 cluster → connection string
-3. Vercel account connected to the repo (for `api/`)
+3. Netlify account connected to the repo (for `api/`)
 4. Optional: custom domain (e.g. `app.example.com` + `api.example.com`)
 
 ## 11. Build status
 
 **Minimal v1 — implemented (2026-09-28), ready for review**
-- Monorepo (`shared/`, `api/`, `web/`), Vercel build output, GitHub Actions for CI and Pages deploy
+- Monorepo (`shared/`, `api/`, `web/`), Netlify function bundle, GitHub Actions for CI and Pages deploy
 - Auth: one-time setup, invite-only registration, phone + password login, rate limiting,
   rotating refresh tokens, recovery codes, profile, password change, device list/revoke
 - Books & RBAC: create/switch/rename/delete books, 5 roles enforced server-side, invites (link, optional
