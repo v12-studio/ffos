@@ -1,0 +1,83 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/* Semantic colour tokens. Components use these names only, so light/dark is decided here. */
+:root {
+  --app-canvas: #f6f7f9;
+  --app-surface: #ffffff;
+  --app-subtle: #f1f3f5;
+  --app-line: #e4e7eb;
+  --app-ink: #111827;
+  --app-muted: #6b7280;
+  --app-primary: #1b4332;
+  --app-primary-fg: #ffffff;
+  --app-accent: #2d6a4f;
+  --app-positive: #047857;
+  --app-negative: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-canvas: #0b0c0e;
+    --app-surface: #131519;
+    --app-subtle: #1b1e23;
+    --app-line: #272b32;
+    --app-ink: #f3f4f6;
+    --app-muted: #9ca3af;
+    --app-primary: #74c69d;
+    --app-primary-fg: #0b1f17;
+    --app-accent: #95d5b2;
+    --app-positive: #34d399;
+    --app-negative: #f87171;
+  }
+}
+
+@theme inline {
+  --color-canvas: var(--app-canvas);
+  --color-surface: var(--app-surface);
+  --color-subtle: var(--app-subtle);
+  --color-line: var(--app-line);
+  --color-ink: var(--app-ink);
+  --color-muted: var(--app-muted);
+  --color-primary: var(--app-primary);
+  --color-primary-fg: var(--app-primary-fg);
+  --color-accent: var(--app-accent);
+  --color-positive: var(--app-positive);
+  --color-negative: var(--app-negative);
+}
+
+@theme {
+  --font-sans: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+@layer base {
+  html {
+    -webkit-tap-highlight-color: transparent;
+    color-scheme: light dark;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+  body {
+    @apply bg-canvas text-ink antialiased;
+    overscroll-behavior-y: none;
+  }
+  input,
+  select,
+  textarea {
+    /* 16px prevents iOS from zooming into focused inputs */
+    font-size: 16px;
+  }
+  :focus-visible {
+    outline: 2px solid var(--app-accent);
+    outline-offset: 2px;
+  }
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
