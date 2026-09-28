@@ -24,6 +24,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Check API address is configured
+        run: |
+          if [ -z "${{ vars.VITE_API_URL }}" ]; then
+            echo "::error::Repository variable VITE_API_URL is not set (Settings → Secrets and variables → Actions → Variables). Without it the app would call http://localhost:8787."
+            exit 1
+          fi
+          echo "Building against ${{ vars.VITE_API_URL }}"
       - run: npm ci
       - run: npm run build -w web
         env:
