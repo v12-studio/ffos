@@ -5,6 +5,8 @@ import { Link } from 'react-router';
 import { formatMoney, type SummaryDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow, useOpenTransaction } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
+import { RecurringDueCard } from '../components/RecurringDue.tsx';
+import { TrendsCard } from '../components/TrendsCard.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, EmptyState, ErrorBanner, SectionTitle, Spinner } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
@@ -30,6 +32,7 @@ export function HomePage() {
     <div className="space-y-6">
       <PageTitle action={<MonthSwitcher month={month} onChange={setMonth} />}>Overview</PageTitle>
       <ErrorBanner error={summary.error} />
+      {month === currentMonth() && <RecurringDueCard month={month} />}
 
       {!s ? (
         <div className="grid h-40 place-items-center text-muted">
@@ -39,6 +42,7 @@ export function HomePage() {
         <>
           <SummaryCard income={s.income} expense={s.expense} net={s.net} money={money} />
           <BudgetSnapshot month={month} />
+          <TrendsCard month={month} onSelect={setMonth} />
 
           {s.count === 0 ? (
             <Card>
@@ -62,7 +66,11 @@ export function HomePage() {
                       const cat = byId.get(row.categoryId);
                       const pct = s.expense ? (row.total / s.expense) * 100 : 0;
                       return (
-                        <div key={row.categoryId} className="flex items-center gap-3 px-4 py-3">
+                        <Link
+                          key={row.categoryId}
+                          to={`/transactions?category=${row.categoryId}${month === currentMonth() ? '' : `&month=${month}`}`}
+                          className="flex items-center gap-3 px-4 py-3 hover:bg-subtle/60"
+                        >
                           <CategoryTile category={cat} size="sm" />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-baseline justify-between gap-2 text-sm">
@@ -76,7 +84,8 @@ export function HomePage() {
                               <div className="h-full rounded-full" style={{ width: `${Math.max(pct, 1.5)}%`, backgroundColor: cat?.color ?? '#64748b' }} />
                             </div>
                           </div>
-                        </div>
+                          <ChevronRight className="size-4 shrink-0 text-muted" />
+                        </Link>
                       );
                     })}
                   </Card>

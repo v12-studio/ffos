@@ -14,6 +14,7 @@ import {
 } from '@ffos/shared';
 import { PageTitle } from '../components/AppShell.tsx';
 import { PhoneField } from '../components/auth-ui.tsx';
+import { useConfirm } from '../components/Confirm.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
 import { api, download } from '../lib/api.ts';
@@ -217,6 +218,7 @@ function InviteSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
 function MemberSheet({ member, onClose }: { member: MemberDTO | null; onClose: () => void }) {
   const { book, can } = useCurrentBook();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [role, setRole] = useState<AssignableRole>('viewer');
   const [lastMember, setLastMember] = useState<string | null>(null);
   if (member && member.userId !== lastMember) {
@@ -253,8 +255,13 @@ function MemberSheet({ member, onClose }: { member: MemberDTO | null; onClose: (
             variant="secondary"
             className="w-full"
             loading={transfer.isPending}
-            onClick={() => {
-              if (confirm(`Make ${member.name} the owner of "${book.name}"? You'll become an admin.`)) transfer.mutate();
+            onClick={async () => {
+              const ok = await confirm({
+                title: `Make ${member.name} the owner?`,
+                message: `They'll own "${book.name}" and you'll become an admin.`,
+                confirmLabel: 'Make owner',
+              });
+              if (ok) transfer.mutate();
             }}
           >
             <Crown className="size-4" /> Make owner
@@ -265,8 +272,14 @@ function MemberSheet({ member, onClose }: { member: MemberDTO | null; onClose: (
             variant="danger"
             className="w-full"
             loading={remove.isPending}
-            onClick={() => {
-              if (confirm(`Remove ${member.name} from "${book.name}"? They'll lose access immediately.`)) remove.mutate();
+            onClick={async () => {
+              const ok = await confirm({
+                title: `Remove ${member.name}?`,
+                message: `They'll lose access to "${book.name}" immediately.`,
+                confirmLabel: 'Remove',
+                danger: true,
+              });
+              if (ok) remove.mutate();
             }}
           >
             <Trash2 className="size-4" /> Remove from book
@@ -387,6 +400,7 @@ function ExportBook() {
 function BookSettings() {
   const { book, can } = useCurrentBook();
   const queryClient = useQueryClient();
+  const confirm = useConfirm();
   const [form, setForm] = useState({ name: book.name, currency: book.currency });
   const [forBook, setForBook] = useState(book.id);
   if (forBook !== book.id) {
@@ -431,7 +445,15 @@ function BookSettings() {
             variant="danger"
             className="w-full"
             loading={leave.isPending}
-            onClick={() => confirm(`Leave "${book.name}"? You'll need a new invite to rejoin.`) && leave.mutate()}
+            onClick={async () => {
+              const ok = await confirm({
+                title: `Leave "${book.name}"?`,
+                message: "You'll need a new invite to rejoin.",
+                confirmLabel: 'Leave book',
+                danger: true,
+              });
+              if (ok) leave.mutate();
+            }}
           >
             <LogOut className="size-4" /> Leave book
           </Button>
@@ -441,7 +463,15 @@ function BookSettings() {
             variant="danger"
             className="w-full"
             loading={remove.isPending}
-            onClick={() => confirm(`Delete "${book.name}" for all members? This can't be undone from the app.`) && remove.mutate()}
+            onClick={async () => {
+              const ok = await confirm({
+                title: `Delete "${book.name}"?`,
+                message: "It will be deleted for all members. This can't be undone from the app.",
+                confirmLabel: 'Delete book',
+                danger: true,
+              });
+              if (ok) remove.mutate();
+            }}
           >
             <Trash2 className="size-4" /> Delete book
           </Button>

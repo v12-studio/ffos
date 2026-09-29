@@ -66,6 +66,8 @@ export interface CategoryDTO {
   kind: 'income' | 'expense';
   icon: string;
   color: string;
+  /** Hidden from pickers; kept so older transactions still show their category. */
+  archived: boolean;
 }
 
 export interface TransactionDTO {
@@ -81,6 +83,42 @@ export interface TransactionDTO {
   createdAt: string;
   updatedAt: string;
   version: number;
+  /** Set when the entry came from a monthly recurring entry. */
+  recurringId: string | null;
+}
+
+/** Searching across all months. */
+export interface TransactionSearchDTO {
+  items: TransactionDTO[];
+  /** More matches exist than were returned; narrow the search. */
+  truncated: boolean;
+}
+
+export interface RecurringDTO {
+  id: string;
+  type: 'income' | 'expense';
+  amount: number;
+  categoryId: string;
+  note: string;
+  dayOfMonth: number;
+  startMonth: string;
+  active: boolean;
+  createdBy: string;
+  createdByName: string;
+  version: number;
+}
+
+/** Monthly entries not yet added for a month (and whose day has come). */
+export interface RecurringDueDTO {
+  month: string;
+  items: { recurring: RecurringDTO; date: string }[];
+}
+
+/** Month-by-month totals, oldest first. */
+export interface TrendsDTO {
+  months: { month: string; income: number; expense: number }[];
+  /** Expense per category, aligned with `months`; largest total first. */
+  byCategory: { categoryId: string; totals: number[] }[];
 }
 
 /** Deleted transactions stay restorable for this long, then are removed permanently. */

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, LogOut, Smartphone, Users, X } from 'lucide-react';
+import { ChevronRight, LogOut, Repeat, Smartphone, Tags, Users, X, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { SessionDTO, UserDTO } from '@ffos/shared';
@@ -13,7 +13,7 @@ import { relativeTime } from '../lib/format.ts';
 
 export function MorePage() {
   const { user, signOut } = useAuth();
-  const { book } = useCurrentBook();
+  const { book, can } = useCurrentBook();
   return (
     <div className="space-y-6">
       <PageTitle>Settings</PageTitle>
@@ -41,6 +41,18 @@ export function MorePage() {
           <ChevronRight className="size-4 shrink-0 text-muted" />
         </Card>
       </Link>
+      <section>
+        <SectionTitle>{book.name}</SectionTitle>
+        <Card className="divide-y divide-line overflow-hidden">
+          <NavRow to="/recurring" icon={Repeat} title="Monthly entries" detail="Rent, salary, EMIs and other repeating entries" />
+          <NavRow
+            to="/categories"
+            icon={Tags}
+            title="Categories"
+            detail={can('setup.manage') ? 'Rename, recolour, reorder or hide' : 'See the categories in this book'}
+          />
+        </Card>
+      </section>
       <AppLockSettings />
       <ProfileForm />
       <PasswordForm />
@@ -50,6 +62,19 @@ export function MorePage() {
       </Button>
       <p className="text-center text-xs text-muted">Family Finance OS · v0.1</p>
     </div>
+  );
+}
+
+function NavRow({ to, icon: Icon, title, detail }: { to: string; icon: LucideIcon; title: string; detail: string }) {
+  return (
+    <Link to={to} className="flex min-h-14 items-center gap-3 px-4 py-3 hover:bg-subtle/60">
+      <Icon className="size-5 shrink-0 text-muted" strokeWidth={1.75} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-[15px] font-medium">{title}</span>
+        <span className="block truncate text-[13px] text-muted">{detail}</span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-muted" />
+    </Link>
   );
 }
 

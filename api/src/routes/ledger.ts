@@ -4,20 +4,28 @@ import {
   can,
   canModifyRecord,
   categoryCreateSchema,
+  categoryOrderSchema,
+  categoryUpdateSchema,
+  currentAppMonth,
   DELETED_RETENTION_DAYS,
   formatMoney,
+  isCatchAllCategory,
   monthSchema,
+  objectIdSchema,
+  shiftMonthKey,
   transactionCreateSchema,
   transactionUpdateSchema,
   type CategoryDTO,
   type DeletedTransactionDTO,
   type SummaryDTO,
   type TransactionDTO,
+  type TransactionSearchDTO,
+  type TrendsDTO,
 } from '@ffos/shared';
 import type { AppEnv } from '../context.ts';
-import type { CategoryDoc, Collections, TransactionDoc } from '../db.ts';
+import type { CategoryDoc, Collections, RecurringDoc, TransactionDoc } from '../db.ts';
 import { diff, logActivity } from '../lib/books.ts';
-import { badRequest, conflict, forbidden, notFound, oid, parse } from '../lib/errors.ts';
+import { badRequest, conflict, forbidden, HttpError, isDuplicateKey, notFound, oid, parse } from '../lib/errors.ts';
 import { requirePermission } from '../middleware/book.ts';
 
 // Mounted under /books/:bookId after requireBook, so c.get('book') and c.get('role') are set.
@@ -27,8 +35,12 @@ export function monthRange(month: string) {
   return { $gte: `${month}-01`, $lte: `${month}-31` };
 }
 
-function currentMonth() {
-  return new Date().toISOString().slice(0, 7);
+/** "This month" is always the month in Mumbai time, whatever the server's clock zone. */
+const currentMonth = () => currentAppMonth();
+
+/** Escape user text for use inside a regular expression. */
+export function escapeRegex(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
@@ -41,15 +53,15 @@ function csvCell(value: string): string {
 }
 
 function toCategoryDTO(c: CategoryDoc): CategoryDTO {
-  return { id: c._id.toHexString(), name: c.name, kind: c.kind, icon: c.icon, color: c.color };
+  return { id: c._id.toHexString(), name: c.name, kind: c.kind, icon: c.icon, color: c.color, archived: c.archived };
 }
 
-async function userNames(db: Collections, ids: ObjectId[]) {
+export async function userNames(db: Collections, ids: ObjectId[]) {
   const users = await db.users.find({ _id: { $in: ids } }, { projection: { name: 1 } }).toArray();
   return new Map(users.map((u) => [u._id.toHexString(), u.name]));
 }
 
-async function toTransactionDTOs(db: Collections, docs: TransactionDoc[]): Promise<TransactionDTO[]> {
+export async function toTransactionDTOs(db: Collections, docs: TransactionDoc[]): Promise<TransactionDTO[]> {
   const names = await userNames(db, docs.map((d) => d.createdBy));
   return docs.map((t) => ({
     id: t._id.toHexString(),
@@ -64,10 +76,11 @@ async function toTransactionDTOs(db: Collections, docs: TransactionDoc[]): Promi
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
     version: t.version,
+    recurringId: t.recurringId?.toHexString() ?? null,
   }));
 }
 
-async function assertCategory(db: Collections, bookId: ObjectId, categoryId: string, type: 'income' | 'expense') {
+export async function assertCategory(db: Collections, bookId: ObjectId, categoryId: string, type: 'income' | 'expense') {
   const category = await db.categories.findOne({ _id: new ObjectId(categoryId), bookId, archived: false });
   if (!category) throw badRequest('Category not found', { categoryId: 'Category not found' });
   if (category.kind !== type) {
@@ -78,29 +91,34 @@ async function assertCategory(db: Collections, bookId: ObjectId, categoryId: str
 
 export const ledgerRoutes = new Hono<AppEnv>()
   // ── categories ──
+  // Hidden (archived) categories are included so older transactions still show their name;
+  // pickers leave them out.
   .get('/categories', async (c) => {
-    const rows = await c
-      .get('db')
-      .categories.find({ bookId: c.get('book')._id, archived: false })
-      .sort({ kind: 1, sort: 1 })
-      .toArray();
+    const rows = await c.get('db').categories.find({ bookId: c.get('book')._id }).sort({ kind: 1, sort: 1 }).toArray();
     return c.json(rows.map(toCategoryDTO));
   })
 
-  // Anyone who can add transactions can add a category while recording one; renaming and
-  // archiving stay with setup.manage.
+  // Anyone who can add transactions can add a category while recording one; renaming,
+  // hiding and reordering stay with setup.manage.
   .post('/categories', requirePermission('txn.create'), async (c) => {
     const input = parse(categoryCreateSchema, await c.req.json());
     const db = c.get('db');
     const bookId = c.get('book')._id;
-    // Reuse a live category with the same name (any case) instead of creating a duplicate.
-    const escaped = input.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Reuse a category with the same name (any case) instead of creating a duplicate,
+    // bringing it back if it was hidden.
     const existing = await db.categories.findOne({
       bookId,
       kind: input.kind,
-      archived: false,
-      name: { $regex: `^${escaped}$`, $options: 'i' },
+      name: { $regex: `^${escapeRegex(input.name)}$`, $options: 'i' },
     });
+    if (existing?.archived) {
+      const revived = await db.categories.findOneAndUpdate(
+        { _id: existing._id },
+        { $set: { archived: false, updatedBy: c.get('userId'), updatedAt: new Date() }, $inc: { version: 1 } },
+        { returnDocument: 'after' },
+      );
+      return c.json(toCategoryDTO(revived!), 200);
+    }
     if (existing) return c.json(toCategoryDTO(existing), 200);
     const last = await db.categories.find({ bookId }).sort({ sort: -1 }).limit(1).next();
     const now = new Date();
@@ -131,6 +149,75 @@ export const ledgerRoutes = new Hono<AppEnv>()
     return c.json(toCategoryDTO(doc), 201);
   })
 
+  // New display order for one kind. Registered before /categories/:id.
+  .put('/categories/order', requirePermission('setup.manage'), async (c) => {
+    const { kind, ids } = parse(categoryOrderSchema, await c.req.json());
+    const db = c.get('db');
+    const bookId = c.get('book')._id;
+    if (ids.length) {
+      await db.categories.bulkWrite(
+        ids.map((id, i) => ({
+          updateOne: { filter: { _id: new ObjectId(id), bookId, kind }, update: { $set: { sort: i } } },
+        })),
+      );
+    }
+    const rows = await db.categories.find({ bookId }).sort({ kind: 1, sort: 1 }).toArray();
+    return c.json(rows.map(toCategoryDTO));
+  })
+
+  // Rename, recolour, change icon, hide or unhide.
+  .patch('/categories/:id', requirePermission('setup.manage'), async (c) => {
+    const input = parse(categoryUpdateSchema, await c.req.json());
+    const db = c.get('db');
+    const bookId = c.get('book')._id;
+    const id = oid(c.req.param('id'));
+    const existing = await db.categories.findOne({ _id: id, bookId });
+    if (!existing) throw notFound('Category not found');
+
+    // "Other" is the fallback everyone relies on; it keeps its name and can't be hidden.
+    if (isCatchAllCategory(existing)) {
+      if (input.name !== undefined && input.name !== existing.name) throw badRequest(`"${existing.name}" can't be renamed`);
+      if (input.archived) throw badRequest(`"${existing.name}" can't be hidden`);
+    }
+    if (input.name !== undefined && input.name.toLowerCase() !== existing.name.toLowerCase()) {
+      const clash = await db.categories.findOne({
+        bookId,
+        kind: existing.kind,
+        _id: { $ne: id },
+        name: { $regex: `^${escapeRegex(input.name)}$`, $options: 'i' },
+      });
+      if (clash) {
+        const message = clash.archived
+          ? `A hidden category is already called "${clash.name}". Unhide it instead.`
+          : `There's already a category called "${clash.name}"`;
+        throw new HttpError(409, 'duplicate_name', message, { name: message });
+      }
+    }
+    if (input.archived === false && existing.archived) {
+      // Unhiding puts it back at the end of its list.
+      const last = await db.categories.find({ bookId, kind: existing.kind }).sort({ sort: -1 }).limit(1).next();
+      Object.assign(input, { sort: (last?.sort ?? 0) + 1 });
+    }
+
+    const changed = diff(existing, input as Partial<CategoryDoc>);
+    if (!Object.keys(changed).length) return c.json(toCategoryDTO(existing));
+    const updated = await db.categories.findOneAndUpdate(
+      { _id: id, bookId },
+      { $set: { ...input, updatedBy: c.get('userId'), updatedAt: new Date() }, $inc: { version: 1 } },
+      { returnDocument: 'after' },
+    );
+    const what =
+      input.archived === true
+        ? `hid category "${existing.name}"`
+        : input.archived === false
+          ? `unhid category "${existing.name}"`
+          : input.name && input.name !== existing.name
+            ? `renamed category "${existing.name}" to "${input.name}"`
+            : `updated category "${existing.name}"`;
+    await logActivity(db, { bookId, userId: c.get('userId'), action: 'update', entity: 'category', entityId: id, summary: what, diff: changed });
+    return c.json(toCategoryDTO(updated!));
+  })
+
   // ── transactions ──
   .get('/transactions', async (c) => {
     const month = parse(monthSchema, c.req.query('month') ?? currentMonth());
@@ -153,6 +240,15 @@ export const ledgerRoutes = new Hono<AppEnv>()
     const input = parse(transactionCreateSchema, await c.req.json());
     const db = c.get('db');
     const bookId = c.get('book')._id;
+
+    // A retried or offline-queued save that already landed: return it instead of adding it twice.
+    const alreadySaved = async () => {
+      const found = input.clientId ? await db.transactions.findOne({ bookId, clientId: input.clientId }) : null;
+      return found ? c.json((await toTransactionDTOs(db, [found]))[0], 200) : null;
+    };
+    const earlier = await alreadySaved();
+    if (earlier) return earlier;
+
     const category = await assertCategory(db, bookId, input.categoryId, input.type);
     const now = new Date();
     const doc: TransactionDoc = {
@@ -168,18 +264,95 @@ export const ledgerRoutes = new Hono<AppEnv>()
       version: 0,
       createdAt: now,
       updatedAt: now,
+      ...(input.clientId ? { clientId: input.clientId } : {}),
     };
-    await db.transactions.insertOne(doc);
+    try {
+      await db.transactions.insertOne(doc);
+    } catch (err) {
+      if (isDuplicateKey(err)) {
+        const raced = await alreadySaved();
+        if (raced) return raced;
+      }
+      throw err;
+    }
+
+    if (input.repeatMonthly) {
+      const rule: RecurringDoc = {
+        _id: new ObjectId(),
+        bookId,
+        type: doc.type,
+        amount: doc.amount,
+        categoryId: doc.categoryId,
+        note: doc.note,
+        dayOfMonth: Number(doc.date.slice(8, 10)),
+        startMonth: doc.date.slice(0, 7),
+        active: true,
+        skippedMonths: [],
+        createdBy: doc.createdBy,
+        updatedBy: doc.createdBy,
+        version: 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await db.recurring.insertOne(rule);
+      // This entry counts as the first month's, so it isn't offered again.
+      await db.transactions.updateOne({ _id: doc._id }, { $set: { recurringId: rule._id } });
+      doc.recurringId = rule._id;
+    }
+
     await logActivity(db, {
       bookId,
       userId: c.get('userId'),
       action: 'create',
       entity: 'transaction',
       entityId: doc._id,
-      summary: `added ${doc.type} of ${formatMoney(doc.amount, c.get('book').currency)} (${category.name})`,
+      summary: `added ${doc.type} of ${formatMoney(doc.amount, c.get('book').currency)} (${category.name})${
+        doc.recurringId ? ', repeating monthly' : ''
+      }`,
     });
     const [dto] = await toTransactionDTOs(db, [doc]);
     return c.json(dto, 201);
+  })
+
+  // Search every month: ?q= matches the note, category name or who added it; optional
+  // category, type and createdBy filters. Newest first.
+  .get('/transactions/search', async (c) => {
+    const db = c.get('db');
+    const bookId = c.get('book')._id;
+    const q = (c.req.query('q') ?? '').trim().slice(0, 100);
+    const category = c.req.query('category');
+    const type = c.req.query('type');
+    const createdBy = c.req.query('createdBy');
+    const filter: Record<string, unknown> = { bookId, deletedAt: { $exists: false } };
+    if (category) filter.categoryId = new ObjectId(parse(objectIdSchema, category));
+    if (type === 'income' || type === 'expense') filter.type = type;
+    if (createdBy) filter.createdBy = oid(createdBy);
+    if (q) {
+      const pattern = { $regex: escapeRegex(q), $options: 'i' };
+      const [cats, members] = await Promise.all([
+        db.categories.find({ bookId, name: pattern }, { projection: { _id: 1 } }).toArray(),
+        db.bookMembers.find({ bookId }, { projection: { userId: 1 } }).toArray(),
+      ]);
+      const people = await db.users
+        .find({ _id: { $in: members.map((m) => m.userId) }, name: pattern }, { projection: { _id: 1 } })
+        .toArray();
+      filter.$or = [
+        { note: pattern },
+        { categoryId: { $in: cats.map((x) => x._id) } },
+        { createdBy: { $in: people.map((u) => u._id) } },
+      ];
+    }
+    const LIMIT = 200;
+    const rows = await db.transactions
+      .find(filter)
+      .sort({ date: -1, createdAt: -1 })
+      .limit(LIMIT + 1)
+      .toArray();
+    const result: TransactionSearchDTO = {
+      items: await toTransactionDTOs(db, rows.slice(0, LIMIT)),
+      truncated: rows.length > LIMIT,
+    };
+    return c.json(result);
   })
 
   .patch('/transactions/:id', async (c) => {
@@ -196,7 +369,9 @@ export const ledgerRoutes = new Hono<AppEnv>()
     const { version, categoryId, ...rest } = input;
     const type = rest.type ?? existing.type;
     const changes: Partial<TransactionDoc> = { ...rest };
-    if (categoryId || rest.type) {
+    // Only check the category when it or the type changes, so entries in a since-hidden
+    // category can still be edited.
+    if ((categoryId && categoryId !== existing.categoryId.toHexString()) || (rest.type && rest.type !== existing.type)) {
       const category = await assertCategory(db, bookId, categoryId ?? existing.categoryId.toHexString(), type);
       changes.categoryId = category._id;
     }
@@ -420,6 +595,56 @@ export const ledgerRoutes = new Hono<AppEnv>()
       count: (income?.n ?? 0) + (expense?.n ?? 0),
       byCategory: byCategory.map((r) => ({ categoryId: r._id.toHexString(), total: r.total })),
       recent: await toTransactionDTOs(db, recent),
+    };
+    return c.json(result);
+  })
+
+  // ── trends: ?end=YYYY-MM (default this month) &months=N (2–24, default 6) ──
+  .get('/trends', async (c) => {
+    const end = parse(monthSchema, c.req.query('end') ?? currentMonth());
+    const count = Math.min(24, Math.max(2, Number(c.req.query('months')) || 6));
+    const months = Array.from({ length: count }, (_, i) => shiftMonthKey(end, i - count + 1));
+    const db = c.get('db');
+    const match = {
+      bookId: c.get('book')._id,
+      deletedAt: { $exists: false },
+      date: { $gte: `${months[0]}-01`, $lte: `${end}-31` },
+    };
+    const [byType, byCategory] = await Promise.all([
+      db.transactions
+        .aggregate<{ _id: { month: string; type: 'income' | 'expense' }; total: number }>([
+          { $match: match },
+          { $group: { _id: { month: { $substrBytes: ['$date', 0, 7] }, type: '$type' }, total: { $sum: '$amount' } } },
+        ])
+        .toArray(),
+      db.transactions
+        .aggregate<{ _id: { month: string; categoryId: ObjectId }; total: number }>([
+          { $match: { ...match, type: 'expense' } },
+          { $group: { _id: { month: { $substrBytes: ['$date', 0, 7] }, categoryId: '$categoryId' }, total: { $sum: '$amount' } } },
+        ])
+        .toArray(),
+    ]);
+    const index = new Map(months.map((m, i) => [m, i]));
+    const rows = months.map((month) => ({ month, income: 0, expense: 0 }));
+    for (const r of byType) {
+      const i = index.get(r._id.month);
+      if (i !== undefined) rows[i]![r._id.type] = r.total;
+    }
+    const perCategory = new Map<string, number[]>();
+    for (const r of byCategory) {
+      const i = index.get(r._id.month);
+      if (i === undefined) continue;
+      const key = r._id.categoryId.toHexString();
+      const totals = perCategory.get(key) ?? months.map(() => 0);
+      totals[i] = r.total;
+      perCategory.set(key, totals);
+    }
+    const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+    const result: TrendsDTO = {
+      months: rows,
+      byCategory: [...perCategory.entries()]
+        .map(([categoryId, totals]) => ({ categoryId, totals }))
+        .sort((a, b) => sum(b.totals) - sum(a.totals)),
     };
     return c.json(result);
   });

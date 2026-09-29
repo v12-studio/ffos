@@ -108,18 +108,70 @@ export const amountSchema = z
   .positive('Amount must be greater than zero')
   .max(1_000_000_000_00, 'Amount is too large');
 
-export const transactionCreateSchema = z.object({
+const colorSchema = z.string().regex(/^#[0-9a-f]{6}$/i);
+
+export const categoryUpdateSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required').max(40).optional(),
+  icon: z.string().max(32).optional(),
+  color: colorSchema.optional(),
+  archived: z.boolean().optional(),
+});
+
+/** New display order for one kind of category: every live id of that kind, in order. */
+export const categoryOrderSchema = z.object({
+  kind: z.enum(['income', 'expense']),
+  ids: z.array(objectIdSchema).max(200),
+});
+
+const transactionFields = {
   type: z.enum(['income', 'expense']),
   amount: amountSchema,
   date: dateSchema,
   categoryId: objectIdSchema,
   note: z.string().trim().max(200).optional().default(''),
+};
+
+export const transactionCreateSchema = z.object({
+  ...transactionFields,
+  /** Client-generated id so a retried or offline-queued save is only recorded once. */
+  clientId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/).optional(),
+  /** Also add this entry every month on the same day. */
+  repeatMonthly: z.boolean().optional(),
 });
 
-export const transactionUpdateSchema = transactionCreateSchema.partial().extend({
+export const transactionUpdateSchema = z.object(transactionFields).partial().extend({
   /** Version the client started editing from; a mismatch returns 409. */
   version: z.number().int().nonnegative(),
 });
+
+// ── recurring entries ──
+export const dayOfMonthSchema = z.number().int().min(1, 'Pick a day from 1 to 31').max(31, 'Pick a day from 1 to 31');
+
+export const recurringCreateSchema = z.object({
+  type: transactionFields.type,
+  amount: transactionFields.amount,
+  categoryId: transactionFields.categoryId,
+  note: transactionFields.note,
+  dayOfMonth: dayOfMonthSchema,
+  /** First month it's due (YYYY-MM). */
+  startMonth: monthSchema,
+});
+
+export const recurringUpdateSchema = z.object({
+  type: transactionFields.type.optional(),
+  amount: amountSchema.optional(),
+  categoryId: objectIdSchema.optional(),
+  note: z.string().trim().max(200).optional(),
+  dayOfMonth: dayOfMonthSchema.optional(),
+  active: z.boolean().optional(),
+});
+
+export const recurringAddSchema = z.object({
+  month: monthSchema,
+  ids: z.array(objectIdSchema).min(1, 'Pick at least one entry').max(100),
+});
+
+export const recurringSkipSchema = z.object({ month: monthSchema });
 
 // ── budget ──
 /** Budget limits and income are minor units; zero is allowed (a head with no money yet). */
@@ -149,3 +201,5 @@ export type InviteCreateInput = z.input<typeof inviteCreateSchema>;
 export type TransactionCreateInput = z.input<typeof transactionCreateSchema>;
 export type TransactionUpdateInput = z.input<typeof transactionUpdateSchema>;
 export type BudgetSaveInput = z.input<typeof budgetSaveSchema>;
+export type RecurringCreateInput = z.input<typeof recurringCreateSchema>;
+export type RecurringUpdateInput = z.input<typeof recurringUpdateSchema>;

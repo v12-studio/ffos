@@ -1,3 +1,5 @@
+import { currentAppMonth, shiftDate, todayInAppZone } from '@ffos/shared';
+
 /** "₹" for INR, "$" for USD… falls back to the code. */
 export function currencySymbol(currency: string): string {
   try {
@@ -15,12 +17,13 @@ export function minorToInput(minor: number): string {
   return minor ? String(minor / 100) : '';
 }
 
+/** YYYY-MM-DD in Mumbai time, so "today" matches the server for every member. */
 export function todayISO(): string {
-  return new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD in local time
+  return todayInAppZone();
 }
 
 export function currentMonth(): string {
-  return todayISO().slice(0, 7);
+  return currentAppMonth();
 }
 
 export function shiftMonth(month: string, delta: number): string {
@@ -37,9 +40,7 @@ export function monthLabel(month: string): string {
 export function dayLabel(date: string): string {
   const today = todayISO();
   if (date === today) return 'Today';
-  const y = new Date();
-  y.setDate(y.getDate() - 1);
-  if (date === y.toLocaleDateString('en-CA')) return 'Yesterday';
+  if (date === shiftDate(today, -1)) return 'Yesterday';
   const [yy, mm, dd] = date.split('-').map(Number) as [number, number, number];
   return new Date(yy, mm - 1, dd).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 }

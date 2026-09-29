@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Copy, PiggyBank, Pencil } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { formatMoney, type BudgetDTO, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
@@ -275,6 +275,12 @@ function HeadTransactionsSheet({
           ))}
         </div>
       )}
+      <Link
+        to={`/transactions?category=${categoryId}&scope=all`}
+        className="mt-4 flex min-h-11 items-center justify-center rounded-lg text-sm font-medium text-accent hover:bg-subtle"
+      >
+        See {category?.name ?? 'this category'} in every month
+      </Link>
     </Sheet>
   );
 }

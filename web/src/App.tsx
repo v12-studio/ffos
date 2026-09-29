@@ -8,11 +8,13 @@ import { BookProvider, useBook } from './lib/book.tsx';
 import { LoginPage, RecoverPage, RecoveryCodesScreen, SetupPage } from './pages/AuthPages.tsx';
 import { BudgetEditPage } from './pages/BudgetEditPage.tsx';
 import { BudgetPage } from './pages/BudgetPage.tsx';
+import { CategoriesPage } from './pages/CategoriesPage.tsx';
 import { DeletedPage } from './pages/DeletedPage.tsx';
 import { HomePage } from './pages/HomePage.tsx';
 import { InvitePage } from './pages/InvitePage.tsx';
 import { MembersPage } from './pages/MembersPage.tsx';
 import { MorePage } from './pages/MorePage.tsx';
+import { RecurringPage } from './pages/RecurringPage.tsx';
 import { TransactionsPage } from './pages/TransactionsPage.tsx';
 
 export function App() {
@@ -66,6 +68,8 @@ export function App() {
               <Route path="budget/:month/edit" element={<BudgetEditPage />} />
               <Route path="members" element={<MembersPage />} />
               <Route path="more" element={<MorePage />} />
+              <Route path="categories" element={<CategoriesPage />} />
+              <Route path="recurring" element={<RecurringPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
@@ -79,7 +83,7 @@ export function App() {
 function BookGate() {
   const { book, isLoading, error } = useBook();
   if (isLoading) return <FullScreenSpinner />;
-  if (error || !book) {
+  if (!book) {
     return (
       <div className="mx-auto max-w-sm p-6 pt-20">
         <ErrorBanner error={error ?? new Error('No books found for your account.')} />

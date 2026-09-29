@@ -23,6 +23,7 @@ import { requireAuth } from '../middleware/auth.ts';
 import { requireBook, requirePermission } from '../middleware/book.ts';
 import { budgetRoutes } from './budget.ts';
 import { ledgerRoutes } from './ledger.ts';
+import { recurringRoutes } from './recurring.ts';
 
 function maskPhone(phone: string) {
   return phone.length > 6 ? `${phone.slice(0, 3)}•••••${phone.slice(-4)}` : '•••';
@@ -261,7 +262,8 @@ const bookRoutes = new Hono<AppEnv>()
   })
 
   .route('/', ledgerRoutes)
-  .route('/', budgetRoutes);
+  .route('/', budgetRoutes)
+  .route('/', recurringRoutes);
 
 function toInviteDTO(invite: InviteDoc, createdByName: string): InviteDTO {
   return {

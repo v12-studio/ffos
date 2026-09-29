@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HashRouter } from 'react-router';
 import { App } from './App.tsx';
+import { ConfirmProvider } from './components/Confirm.tsx';
 import { ToastProvider } from './components/Toast.tsx';
 import { ApiError } from './lib/api.ts';
 import { AuthProvider } from './lib/auth.tsx';
@@ -25,7 +26,9 @@ createRoot(document.getElementById('root')!).render(
       <HashRouter>
         <AuthProvider>
           <ToastProvider>
-            <App />
+            <ConfirmProvider>
+              <App />
+            </ConfirmProvider>
           </ToastProvider>
         </AuthProvider>
       </HashRouter>

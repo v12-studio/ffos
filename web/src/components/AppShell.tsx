@@ -8,6 +8,7 @@ import { useCurrentBook } from '../lib/book.tsx';
 import { dayLabel, monthLabel, shiftMonth } from '../lib/format.ts';
 import { Logo } from './auth-ui.tsx';
 import { CategoryTile } from './CategoryIcon.tsx';
+import { OutboxSync } from './OutboxSync.tsx';
 import { TransactionSheet } from './TransactionSheet.tsx';
 import { Button, ErrorBanner, Field, fieldErrors, RoleBadge, Sheet } from './ui.tsx';
 
@@ -87,6 +88,7 @@ export function AppShell() {
           </header>
 
           <main className="mx-auto max-w-2xl px-4 pt-5 pb-28 lg:max-w-3xl lg:px-8 lg:pt-8 lg:pb-12">
+            <OutboxSync />
             <Outlet />
           </main>
         </div>

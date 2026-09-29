@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { can, type BookDTO, type Permission } from '@ffos/shared';
 import { api } from './api.ts';
+import { loadSnapshot, saveSnapshot } from './snapshot.ts';
 
 const BOOK_KEY = 'ffos.book';
 
@@ -26,7 +27,17 @@ function readStoredBookId() {
 
 export function BookProvider({ children }: { children: ReactNode }) {
   const [selectedId, setSelectedId] = useState<string | null>(readStoredBookId);
-  const booksQuery = useQuery({ queryKey: ['books'], queryFn: () => api.get<BookDTO[]>('/books') });
+  const booksQuery = useQuery({
+    queryKey: ['books'],
+    queryFn: async () => {
+      const list = await api.get<BookDTO[]>('/books');
+      saveSnapshot('books', list);
+      return list;
+    },
+    // Offline start: use the last-known list, and refetch as soon as possible.
+    initialData: () => loadSnapshot<BookDTO[]>('books'),
+    initialDataUpdatedAt: 0,
+  });
   const books = booksQuery.data ?? [];
   // Fall back to the first book if the remembered one is gone (left, removed, deleted).
   const book = books.find((b) => b.id === selectedId) ?? books[0] ?? null;

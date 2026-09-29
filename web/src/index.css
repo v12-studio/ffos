@@ -15,6 +15,9 @@
   --app-positive: #047857;
   --app-negative: #b42318;
   --app-warning: #b54708;
+  /* Chart series (validated for colour-vision deficiency against each surface). */
+  --app-chart-income: #047857;
+  --app-chart-expense: #b42318;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -31,6 +34,8 @@
     --app-positive: #34d399;
     --app-negative: #f87171;
     --app-warning: #fbbf24;
+    --app-chart-income: #0d9488;
+    --app-chart-expense: #e5484d;
   }
 }
 
@@ -47,6 +52,8 @@
   --color-positive: var(--app-positive);
   --color-negative: var(--app-negative);
   --color-warning: var(--app-warning);
+  --color-chart-income: var(--app-chart-income);
+  --color-chart-expense: var(--app-chart-expense);
 }
 
 @theme {

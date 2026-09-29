@@ -1,20 +1,36 @@
 import {
+  Baby,
   BookOpen,
   Briefcase,
+  Car,
   Clapperboard,
+  Coffee,
+  Droplet,
+  Dumbbell,
   Fuel,
+  Gift,
   GraduationCap,
+  HeartPulse,
   House,
   Landmark,
   Package,
+  PawPrint,
   PiggyBank,
   Pill,
+  Plane,
   Plus,
+  Receipt,
+  Shirt,
   ShoppingBag,
   ShoppingCart,
+  Smartphone,
+  Sparkles,
   Tag,
   TrendingUp,
+  Tv,
   Utensils,
+  Wifi,
+  Wrench,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
@@ -38,7 +54,36 @@ const ICONS: Record<string, LucideIcon> = {
   plus: Plus,
   book: BookOpen,
   tag: Tag,
+  car: Car,
+  phone: Smartphone,
+  wifi: Wifi,
+  tv: Tv,
+  water: Droplet,
+  repair: Wrench,
+  health: HeartPulse,
+  fitness: Dumbbell,
+  kids: Baby,
+  pets: PawPrint,
+  travel: Plane,
+  clothes: Shirt,
+  coffee: Coffee,
+  gift: Gift,
+  bill: Receipt,
+  care: Sparkles,
 };
+
+/** Icon keys offered when editing a category, in picker order. */
+export const ICON_KEYS = Object.keys(ICONS);
+
+/** Colours offered when editing a category (readable on light and dark surfaces). */
+export const CATEGORY_COLORS = [
+  '#15803d', '#047857', '#0e7490', '#1d4ed8', '#4338ca', '#6d28d9', '#7e22ce',
+  '#be185d', '#b91c1c', '#c2410c', '#a16207', '#4d7c0f', '#475569', '#64748b',
+];
+
+export function iconFor(key: string): LucideIcon {
+  return ICONS[key] ?? Tag;
+}
 
 // Books created before icons were keys stored emoji; match those by the default category name.
 const BY_NAME: Record<string, LucideIcon> = {

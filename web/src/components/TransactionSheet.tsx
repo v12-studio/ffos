@@ -1,12 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Delete, Trash2 } from 'lucide-react';
+import { AlertTriangle, CopyPlus, Delete, Repeat, Trash2, Wallet } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { canModifyRecord, formatMoney, isCatchAllCategory, toMinor, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
+import {
+  canModifyRecord,
+  formatMoney,
+  isCatchAllCategory,
+  toMinor,
+  type BudgetLineDTO,
+  type CategoryDTO,
+  type TransactionDTO,
+} from '@ffos/shared';
 import { api, ApiError } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { useBudget } from '../lib/budget.ts';
+import { lineStatus, statusBar, statusText, useBudget, usedPct } from '../lib/budget.ts';
 import { monthLabel, todayISO } from '../lib/format.ts';
+import { enqueue, isNetworkError, newClientId } from '../lib/offline.ts';
+import { recentCategoryIds, rememberCategory } from '../lib/recent.ts';
+import { loadSnapshot, saveSnapshot } from '../lib/snapshot.ts';
 import { categoryIcon } from './CategoryIcon.tsx';
 import { useToast } from './Toast.tsx';
 import { Button, ErrorBanner, inputClass, Segmented, Sheet } from './ui.tsx';
@@ -14,8 +25,15 @@ import { Button, ErrorBanner, inputClass, Segmented, Sheet } from './ui.tsx';
 export function useCategories(bookId: string) {
   return useQuery({
     queryKey: ['book', bookId, 'categories'],
-    queryFn: () => api.get<CategoryDTO[]>(`/books/${bookId}/categories`),
+    queryFn: async () => {
+      const list = await api.get<CategoryDTO[]>(`/books/${bookId}/categories`);
+      saveSnapshot(`categories.${bookId}`, list);
+      return list;
+    },
     staleTime: 5 * 60_000,
+    // Offline start: the last-known categories, so entries can still be recorded.
+    initialData: () => loadSnapshot<CategoryDTO[]>(`categories.${bookId}`),
+    initialDataUpdatedAt: 0,
   });
 }
 
@@ -33,7 +51,7 @@ function applyKey(current: string, key: string): string {
 export function TransactionSheet({
   open,
   onClose,
-  transaction,
+  transaction: initial,
 }: {
   open: boolean;
   onClose: () => void;
@@ -51,6 +69,11 @@ export function TransactionSheet({
   const [categoryId, setCategoryId] = useState('');
   const [note, setNote] = useState('');
   const [newCategory, setNewCategory] = useState('');
+  const [repeat, setRepeat] = useState(false);
+  // "Add again" turns an open transaction into a new one with the same details.
+  const [asNew, setAsNew] = useState(false);
+  const [clientId, setClientId] = useState(newClientId);
+  const transaction = asNew ? null : initial;
 
   // Adds a named category to the book so it shows up for future transactions, then selects it.
   const addCategory = useMutation({
@@ -67,14 +90,19 @@ export function TransactionSheet({
   // Reset the form each time the sheet opens.
   useEffect(() => {
     if (!open) return;
-    setType(transaction?.type ?? 'expense');
-    setAmount(transaction ? String(transaction.amount / 100) : '');
-    setDate(transaction?.date ?? todayISO());
-    setCategoryId(transaction?.categoryId ?? '');
-    setNote(transaction?.note ?? '');
+    setType(initial?.type ?? 'expense');
+    setAmount(initial ? String(initial.amount / 100) : '');
+    setDate(initial?.date ?? todayISO());
+    setCategoryId(initial?.categoryId ?? '');
+    setNote(initial?.note ?? '');
     setNewCategory('');
+    setRepeat(false);
+    setAsNew(false);
+    setClientId(newClientId());
     addCategory.reset();
-  }, [open, transaction]);
+    save.reset();
+    remove.reset();
+  }, [open, initial]);
 
   // Physical keyboard support for desktop.
   useEffect(() => {
@@ -90,14 +118,27 @@ export function TransactionSheet({
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['book', book.id] });
 
+  const newBody = () => ({ type, amount: toMinor(amount) ?? 0, date, categoryId, note, clientId, ...(repeat ? { repeatMonthly: true } : {}) });
   const save = useMutation({
     mutationFn: () => {
       const body = { type, amount: toMinor(amount) ?? 0, date, categoryId, note };
       return transaction
         ? api.patch<TransactionDTO>(`/books/${book.id}/transactions/${transaction.id}`, { ...body, version: transaction.version })
-        : api.post<TransactionDTO>(`/books/${book.id}/transactions`, body);
+        : api.post<TransactionDTO>(`/books/${book.id}/transactions`, newBody());
+    },
+    // Run even when the browser says it's offline (React Query would otherwise pause the save
+    // indefinitely), so it fails fast and lands in the offline queue below.
+    networkMode: 'always',
+    // No connection: keep a new entry on this device and send it when the connection returns.
+    onError: (err) => {
+      if (transaction || !isNetworkError(err)) return;
+      enqueue({ bookId: book.id, body: newBody() });
+      rememberCategory(book.id, categoryId);
+      onClose();
+      toast({ message: "You're offline. Saved on this device; it will sync when you're back online.", duration: 5000 });
     },
     onSuccess: () => {
+      rememberCategory(book.id, categoryId);
       invalidate();
       onClose();
       if (type === 'expense' && budgetCheck?.inBudget && budgetCheck.leftAfter < 0) {
@@ -136,13 +177,27 @@ export function TransactionSheet({
     : can('txn.create');
   const canDelete = isEdit && canModifyRecord(book.role, 'delete', transaction!.createdBy, user!.id);
   const minor = toMinor(amount) ?? 0;
-  // Keep "Other" at the end so categories added later sit before it.
   const budgetMonth = date.slice(0, 7);
   const budget = useBudget(book.id, budgetMonth, open && type === 'expense');
-  // This month's budget heads first (in plan order), then other categories, "Other" last.
+  const recent = useMemo(() => (open ? recentCategoryIds(book.id) : []), [open, book.id]);
+  // This month's budget heads first (in plan order), then the ones this person used most
+  // recently, then the rest in the book's order, "Other" last.
   const headOrder = new Map((budget.data?.lines ?? []).map((l, i) => [l.categoryId, i]));
-  const rank = (c: CategoryDTO) => (headOrder.has(c.id) ? headOrder.get(c.id)! : isCatchAllCategory(c) ? 10_000 : 1_000);
-  const options = (categories.data ?? []).filter((c) => c.kind === type).sort((a, b) => rank(a) - rank(b));
+  const rank = (c: CategoryDTO) => {
+    if (headOrder.has(c.id)) return headOrder.get(c.id)!;
+    if (isCatchAllCategory(c)) return 10_000;
+    const r = recent.indexOf(c.id);
+    return r >= 0 ? 1_000 + r : 2_000;
+  };
+  // Hidden categories aren't offered, except the one an existing entry already uses.
+  const options = (categories.data ?? [])
+    .filter((c) => c.kind === type && (!c.archived || c.id === categoryId))
+    .sort((a, b) => rank(a) - rank(b));
+  // With a budget for the month, budget heads get their own group so they're easy to tell apart.
+  const budgetLines = type === 'expense' && budget.data?.exists ? budget.data.lines : [];
+  const lineById = new Map(budgetLines.map((l) => [l.categoryId, l]));
+  const budgetOptions = options.filter((c) => lineById.has(c.id));
+  const otherOptions = options.filter((c) => !lineById.has(c.id));
   const selectedCategory = options.find((c) => c.id === categoryId);
   const offerNewCategory = canSave && can('txn.create') && selectedCategory !== undefined && isCatchAllCategory(selectedCategory);
   const conflict = save.error instanceof ApiError && save.error.status === 409;
@@ -200,26 +255,57 @@ export function TransactionSheet({
 
         <div>
           <p className="mb-2 text-sm font-medium">Category</p>
-          <div className="flex flex-wrap gap-2">
-            {options.map((c) => {
-              const Icon = categoryIcon(c);
-              const selected = categoryId === c.id;
-              return (
-                <button
+          {budgetOptions.length > 0 ? (
+            <div className="space-y-3">
+              <section aria-label={`Budget heads for ${monthLabel(budgetMonth)}`}>
+                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
+                  <Wallet className="size-3.5" strokeWidth={2} />
+                  In your {monthLabel(budgetMonth)} budget
+                </p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  {budgetOptions.map((c) => (
+                    <CategoryChip
+                      key={c.id}
+                      category={c}
+                      selected={categoryId === c.id}
+                      disabled={!canSave}
+                      onSelect={() => setCategoryId(c.id)}
+                      line={lineById.get(c.id)}
+                      currency={book.currency}
+                    />
+                  ))}
+                </div>
+              </section>
+              {otherOptions.length > 0 && (
+                <section aria-label="Categories not in budget">
+                  <p className="mb-1.5 text-xs font-medium text-muted">Not in budget</p>
+                  <div className="flex flex-wrap gap-2">
+                    {otherOptions.map((c) => (
+                      <CategoryChip
+                        key={c.id}
+                        category={c}
+                        selected={categoryId === c.id}
+                        disabled={!canSave}
+                        onSelect={() => setCategoryId(c.id)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {options.map((c) => (
+                <CategoryChip
                   key={c.id}
+                  category={c}
+                  selected={categoryId === c.id}
                   disabled={!canSave}
-                  onClick={() => setCategoryId(c.id)}
-                  aria-pressed={selected}
-                  className={`flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors ${
-                    selected ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface hover:bg-subtle'
-                  }`}
-                >
-                  <Icon className="size-4" strokeWidth={1.75} style={selected ? undefined : { color: c.color }} />
-                  {c.name}
-                </button>
-              );
-            })}
-          </div>
+                  onSelect={() => setCategoryId(c.id)}
+                />
+              ))}
+            </div>
+          )}
 
           {offerNewCategory && (
             <form
@@ -273,6 +359,17 @@ export function TransactionSheet({
           />
         </div>
 
+        {canSave && !transaction && (
+          <label className="-mt-2 flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-line px-3 text-sm">
+            <Repeat className="size-4 shrink-0 text-muted" strokeWidth={1.75} />
+            <span className="min-w-0 flex-1">
+              Repeat every month on the {ordinal(Number(date.slice(8, 10)))}
+              {Number(date.slice(8, 10)) > 28 && <span className="block text-xs text-muted">Or the last day in shorter months</span>}
+            </span>
+            <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="size-4.5 accent-(--app-primary)" />
+          </label>
+        )}
+
         {canSave && (
           <div className="grid grid-cols-3 gap-1.5">
             {KEYS.map((k) => (
@@ -315,6 +412,22 @@ export function TransactionSheet({
                 <Trash2 className="size-4" />
               </Button>
             )}
+            {isEdit && can('txn.create') && (
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setAsNew(true);
+                  setDate(todayISO());
+                  setClientId(newClientId());
+                  save.reset();
+                }}
+                aria-label="Add again as a new transaction"
+                title="Add again"
+              >
+                <CopyPlus className="size-4" />
+                {!canSave && 'Add again'}
+              </Button>
+            )}
             {canSave && (
               <Button className="flex-1" disabled={minor <= 0 || !categoryId || conflict} loading={save.isPending} onClick={() => save.mutate()}>
                 {isEdit ? 'Save changes' : type === 'income' ? 'Save income' : 'Save expense'}
@@ -325,6 +438,69 @@ export function TransactionSheet({
       </div>
     </Sheet>
   );
+}
+
+/** A category button. Budget heads (`line` given) also show what's left and a usage bar. */
+function CategoryChip({
+  category,
+  selected,
+  disabled,
+  onSelect,
+  line,
+  currency,
+}: {
+  category: CategoryDTO;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+  line?: BudgetLineDTO;
+  currency?: string;
+}) {
+  const Icon = categoryIcon(category);
+  const tone = selected ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface hover:bg-subtle';
+  if (!line) {
+    return (
+      <button
+        disabled={disabled}
+        onClick={onSelect}
+        aria-pressed={selected}
+        className={`flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors ${tone}`}
+      >
+        <Icon className="size-4" strokeWidth={1.75} style={selected ? undefined : { color: category.color }} />
+        {category.name}
+      </button>
+    );
+  }
+  const status = lineStatus(line);
+  const left = line.planned - line.spent;
+  return (
+    <button
+      disabled={disabled}
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={`flex min-w-0 flex-col gap-1 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors ${tone}`}
+    >
+      <span className="flex min-w-0 items-center gap-1.5 font-medium">
+        <Icon className="size-4 shrink-0" strokeWidth={1.75} style={selected ? undefined : { color: category.color }} />
+        <span className="truncate">{category.name}</span>
+      </span>
+      <span className={`text-xs tabular ${selected ? 'text-primary-fg/80' : statusText[status]}`}>
+        {left >= 0 ? `${formatMoney(left, currency!)} left` : `${formatMoney(-left, currency!)} over`}
+      </span>
+      <span className={`h-1 w-full overflow-hidden rounded-full ${selected ? 'bg-primary-fg/25' : 'bg-subtle'}`} aria-hidden>
+        <span
+          className={`block h-full rounded-full ${selected ? 'bg-primary-fg' : statusBar[status]}`}
+          style={{ width: `${usedPct(line)}%` }}
+        />
+      </span>
+    </button>
+  );
+}
+
+/** 1 → "1st", 22 → "22nd". */
+function ordinal(n: number): string {
+  const suffix = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
+  return `${n}${suffix}`;
 }
 
 type BudgetCheck =

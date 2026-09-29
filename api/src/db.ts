@@ -86,7 +86,7 @@ export interface ActivityDoc {
     | 'remove'
     | 'transfer'
     | 'settings';
-  entity: 'transaction' | 'category' | 'member' | 'book' | 'budget';
+  entity: 'transaction' | 'category' | 'member' | 'book' | 'budget' | 'recurring';
   entityId: ObjectId;
   summary: string;
   diff?: Record<string, { from: unknown; to: unknown }>;
@@ -120,6 +120,23 @@ export interface TransactionDoc extends BookScoped {
   note: string;
   /** Set on delete; a TTL index removes the document permanently at this time unless restored. */
   purgeAt?: Date;
+  /** Client-supplied id; a unique index makes retried and offline-queued saves idempotent. */
+  clientId?: string;
+  /** The monthly entry this was added from. */
+  recurringId?: ObjectId;
+}
+
+/** An income or expense that repeats every month on the same day. */
+export interface RecurringDoc extends BookScoped {
+  type: 'income' | 'expense';
+  amount: number;
+  categoryId: ObjectId;
+  note: string;
+  dayOfMonth: number;
+  startMonth: string; // YYYY-MM
+  active: boolean;
+  /** Months the user chose not to add it. */
+  skippedMonths: string[];
 }
 
 /** One month's plan for a book: expected income split into budget heads (expense categories). */
@@ -181,6 +198,7 @@ export async function collections() {
     categories: db.collection<CategoryDoc>('categories'),
     transactions: db.collection<TransactionDoc>('transactions'),
     budgets: db.collection<BudgetDoc>('budgets'),
+    recurring: db.collection<RecurringDoc>('recurring'),
   };
 }
 
@@ -217,6 +235,15 @@ async function ensureIndexes(db: Db) {
       { partialFilterExpression: { deletedAt: { $type: 'date' } } },
     ),
     db.collection('transactions').createIndex({ purgeAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('transactions').createIndex(
+      { bookId: 1, clientId: 1 },
+      { unique: true, partialFilterExpression: { clientId: { $type: 'string' } } },
+    ),
+    db.collection('transactions').createIndex(
+      { bookId: 1, recurringId: 1, date: 1 },
+      { partialFilterExpression: { recurringId: { $type: 'objectId' } } },
+    ),
+    db.collection('recurring').createIndex({ bookId: 1 }),
     db.collection('budgets').createIndex({ bookId: 1, month: 1 }, { unique: true }),
   ];
   await Promise.all(ops);

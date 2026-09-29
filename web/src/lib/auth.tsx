@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import type { AuthResponse, UserDTO } from '@ffos/shared';
 import { api, hasStoredSession, onSessionEnded, refreshSession, setTokens, storedRefreshToken } from './api.ts';
 import { clearAllLocks } from './applock.ts';
+import { clearSnapshots, loadSnapshot, saveSnapshot } from './snapshot.ts';
 
 type Status = 'loading' | 'setup' | 'signedOut' | 'signedIn' | 'offline';
 
@@ -35,6 +36,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const ok = await refreshSession();
           if (ok) {
             const me = await api.get<UserDTO>('/me');
+            saveSnapshot('me', me);
             if (!cancelled) {
               setUser(me);
               setStatus('signedIn');
@@ -42,8 +44,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
           // Still holding a token means the refresh failed for network reasons, not rejection.
+          // Open with the last-known profile so entries can still be recorded offline.
           if (hasStoredSession()) {
-            if (!cancelled) setStatus('offline');
+            const cached = loadSnapshot<UserDTO>('me');
+            if (!cancelled) {
+              if (cached) setUser(cached);
+              setStatus(cached ? 'signedIn' : 'offline');
+            }
             return;
           }
         }
@@ -60,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearLocal = useCallback(() => {
     setTokens(null);
+    clearSnapshots();
     clearAllLocks(); // the app lock belongs to the signed-in session on this device
     setUser(null);
     setStatus('signedOut');
@@ -75,6 +83,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       recoveryCodes,
       signIn: (res) => {
         setTokens(res);
+        clearSnapshots();
+        saveSnapshot('me', res.user);
         queryClient.clear();
         setUser(res.user);
         setRecoveryCodes(res.recoveryCodes ?? null);
@@ -85,7 +95,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (refreshToken) await api.post('/auth/logout', { refreshToken }).catch(() => undefined);
         clearLocal();
       },
-      setUser,
+      setUser: (next) => {
+        saveSnapshot('me', next);
+        setUser(next);
+      },
       dismissRecoveryCodes: () => setRecoveryCodes(null),
       retry: () => {
         setStatus('loading');
