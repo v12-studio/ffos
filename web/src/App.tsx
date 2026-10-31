@@ -27,7 +27,7 @@ export function App() {
       <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-6 text-center">
         <WifiOff className="size-7 text-muted" strokeWidth={1.75} />
         <p className="font-medium">Can't reach the server</p>
-        <p className="text-sm text-muted">Check your internet connection and try again.</p>
+        <p className="text-label text-muted">Check your internet connection and try again.</p>
         <Button onClick={retry}>Try again</Button>
       </div>
     );

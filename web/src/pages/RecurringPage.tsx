@@ -3,10 +3,10 @@ import { Pause, Plus, Repeat, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { canModifyRecord, formatMoney, shiftMonthKey, toMinor, type RecurringDTO } from '@ffos/shared';
 import { PageTitle } from '../components/AppShell.tsx';
-import { CategoryTile, categoryIcon } from '../components/CategoryIcon.tsx';
+import { CategoryGlyph, CategoryTile } from '../components/CategoryIcon.tsx';
 import { useConfirm } from '../components/Confirm.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { Button, Card, EmptyState, ErrorBanner, Field, fieldErrors, inputClass, SectionTitle, Segmented, Sheet, Spinner } from '../components/ui.tsx';
+import { Button, Card, Chip, EmptyState, ErrorBanner, Field, fieldErrors, inputClass, PageSkeleton, SectionTitle, Segmented, Sheet } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
@@ -40,8 +40,8 @@ export function RecurringPage() {
       >
         <CategoryTile category={cat} />
         <span className="min-w-0 flex-1">
-          <span className={`block truncate text-[15px] font-medium ${r.active ? '' : 'text-muted'}`}>{r.note || cat?.name || 'Monthly entry'}</span>
-          <span className="block truncate text-[13px] text-muted">
+          <span className={`block truncate text-body font-medium ${r.active ? '' : 'text-muted'}`}>{r.note || cat?.name || 'Monthly entry'}</span>
+          <span className="block truncate text-label text-muted">
             {[
               r.note ? cat?.name : null,
               `${ordinal(r.dayOfMonth)} monthly`,
@@ -52,7 +52,7 @@ export function RecurringPage() {
               .join(' · ')}
           </span>
         </span>
-        <span className={`shrink-0 text-[15px] font-semibold tabular ${r.type === 'income' ? 'text-positive' : ''} ${r.active ? '' : 'opacity-60'}`}>
+        <span className={`shrink-0 text-body font-semibold tabular ${r.type === 'income' ? 'text-positive' : ''} ${r.active ? '' : 'opacity-60'}`}>
           {r.type === 'income' ? '+' : '−'}
           {money(r.amount)}
         </span>
@@ -66,7 +66,7 @@ export function RecurringPage() {
         subtitle="Rent, salary, EMIs… offered on the Overview each month once their day comes"
         action={
           can('txn.create') && (
-            <Button className="min-h-9! shrink-0 px-3 text-sm" onClick={() => setEditing('new')}>
+            <Button className="min-h-9! shrink-0 px-3 text-label" onClick={() => setEditing('new')}>
               <Plus className="size-4" /> Add
             </Button>
           )
@@ -77,9 +77,7 @@ export function RecurringPage() {
       <ErrorBanner error={rules.error} />
 
       {rules.isLoading ? (
-        <div className="grid h-40 place-items-center text-muted">
-          <Spinner />
-        </div>
+        <PageSkeleton />
       ) : list.length === 0 ? (
         <Card>
           <EmptyState icon={<Repeat className="size-5" />} title="No monthly entries yet">
@@ -168,7 +166,7 @@ function RecurringSheet({ editing, onClose }: { editing: RecurringDTO | 'new' | 
         }}
       >
         {existing && !existing.active && (
-          <p className="rounded-lg bg-subtle px-3 py-2 text-sm text-muted">Paused: it isn't offered on the Overview.</p>
+          <p className="rounded-lg bg-subtle px-3 py-2 text-label text-muted">Paused: it isn't offered on the Overview.</p>
         )}
         <Segmented
           value={form.type}
@@ -199,32 +197,22 @@ function RecurringSheet({ editing, onClose }: { editing: RecurringDTO | 'new' | 
             onChange={(e) => setForm({ ...form, day: e.target.value.replace(/\D/g, '').slice(0, 2) })}
           />
         </div>
-        {day > 28 && day <= 31 && <p className="-mt-2 text-xs text-muted">In shorter months it falls on the last day.</p>}
+        {day > 28 && day <= 31 && <p className="-mt-2 text-caption text-muted">In shorter months it falls on the last day.</p>}
 
         <div>
-          <p className="mb-2 text-sm font-medium">Category</p>
+          <p className="mb-2 text-label font-medium">Category</p>
           <div className="flex flex-wrap gap-2">
             {options.map((c) => {
-              const Icon = categoryIcon(c);
               const selected = form.categoryId === c.id;
               return (
-                <button
-                  key={c.id}
-                  type="button"
-                  disabled={!canEdit}
-                  onClick={() => setForm({ ...form, categoryId: c.id })}
-                  aria-pressed={selected}
-                  className={`flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors ${
-                    selected ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface hover:bg-subtle'
-                  }`}
-                >
-                  <Icon className="size-4" strokeWidth={1.75} style={selected ? undefined : { color: c.color }} />
+                <Chip key={c.id} selected={selected} disabled={!canEdit} onClick={() => setForm({ ...form, categoryId: c.id })}>
+                  <CategoryGlyph category={c} selected={selected} />
                   {c.name}
-                </button>
+                </Chip>
               );
             })}
           </div>
-          {errors.categoryId && <p className="mt-1.5 text-sm text-negative">{errors.categoryId}</p>}
+          {errors.categoryId && <p className="mt-1.5 text-label text-negative">{errors.categoryId}</p>}
         </div>
 
         <input
@@ -239,7 +227,7 @@ function RecurringSheet({ editing, onClose }: { editing: RecurringDTO | 'new' | 
 
         {!existing && (
           <div>
-            <p className="mb-2 text-sm font-medium">Starts</p>
+            <p className="mb-2 text-label font-medium">Starts</p>
             <Segmented
               value={form.startMonth}
               onChange={(startMonth) => setForm({ ...form, startMonth })}
@@ -248,7 +236,7 @@ function RecurringSheet({ editing, onClose }: { editing: RecurringDTO | 'new' | 
                 { value: shiftMonthKey(thisMonth, 1), label: monthLabel(shiftMonthKey(thisMonth, 1)) },
               ]}
             />
-            <p className="mt-1.5 text-xs text-muted">Already recorded it this month? Start next month.</p>
+            <p className="mt-1.5 text-caption text-muted">Already recorded it this month? Start next month.</p>
           </div>
         )}
 

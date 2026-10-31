@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, CopyPlus, Delete, Repeat, Trash2, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronRight, CopyPlus, Delete, Repeat, Search, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   canModifyRecord,
@@ -13,12 +13,12 @@ import {
 import { api, ApiError } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { lineStatus, statusBar, statusText, useBudget, usedPct } from '../lib/budget.ts';
+import { lineStatus, statusText, useBudget } from '../lib/budget.ts';
 import { monthLabel, todayISO } from '../lib/format.ts';
 import { enqueue, isNetworkError, newClientId } from '../lib/offline.ts';
 import { recentCategoryIds, rememberCategory } from '../lib/recent.ts';
 import { loadSnapshot, saveSnapshot } from '../lib/snapshot.ts';
-import { categoryIcon } from './CategoryIcon.tsx';
+import { CategoryGlyph, CategoryTile } from './CategoryIcon.tsx';
 import { useToast } from './Toast.tsx';
 import { Button, ErrorBanner, inputClass, Segmented, Sheet } from './ui.tsx';
 
@@ -36,6 +36,9 @@ export function useCategories(bookId: string) {
     initialDataUpdatedAt: 0,
   });
 }
+
+// How many categories the quick-pick strip shows; the rest are under "All".
+const STRIP_SIZE = 12;
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'] as const;
 
@@ -73,6 +76,9 @@ export function TransactionSheet({
   // "Add again" turns an open transaction into a new one with the same details.
   const [asNew, setAsNew] = useState(false);
   const [clientId, setClientId] = useState(newClientId);
+  // The full category list replaces the form inside the sheet.
+  const [view, setView] = useState<'form' | 'categories'>('form');
+  const [categorySearch, setCategorySearch] = useState('');
   const transaction = asNew ? null : initial;
 
   // Adds a named category to the book so it shows up for future transactions, then selects it.
@@ -84,6 +90,7 @@ export function TransactionSheet({
       );
       setCategoryId(created.id);
       setNewCategory('');
+      setView('form');
     },
   });
 
@@ -98,6 +105,8 @@ export function TransactionSheet({
     setNewCategory('');
     setRepeat(false);
     setAsNew(false);
+    setView('form');
+    setCategorySearch('');
     setClientId(newClientId());
     addCategory.reset();
     save.reset();
@@ -202,6 +211,29 @@ export function TransactionSheet({
   const offerNewCategory = canSave && can('txn.create') && selectedCategory !== undefined && isCatchAllCategory(selectedCategory);
   const conflict = save.error instanceof ApiError && save.error.status === 409;
 
+  // Quick picks: what this person used last, then the order above. The selected one always shows.
+  const recentRank = (c: CategoryDTO) => {
+    const r = recent.indexOf(c.id);
+    return r >= 0 ? r : recent.length;
+  };
+  let strip = [...options].sort((a, b) => recentRank(a) - recentRank(b)).slice(0, STRIP_SIZE);
+  if (selectedCategory && !strip.includes(selectedCategory)) strip = [selectedCategory, ...strip.slice(0, -1)];
+  const searchText = categorySearch.trim().toLowerCase();
+  const matchesSearch = (c: CategoryDTO) => c.name.toLowerCase().includes(searchText);
+  const categoryGroups: [string, CategoryDTO[]][] = (
+    budgetOptions.length > 0
+      ? ([
+          [`In your ${monthLabel(budgetMonth)} budget`, budgetOptions.filter(matchesSearch)],
+          ['Not in budget', otherOptions.filter(matchesSearch)],
+        ] as [string, CategoryDTO[]][])
+      : ([['', options.filter(matchesSearch)]] as [string, CategoryDTO[]][])
+  ).filter(([, list]) => list.length > 0);
+  const pickFromList = (c: CategoryDTO) => {
+    setCategoryId(c.id);
+    // Choosing the catch-all stays here to offer naming a new category.
+    if (!(canSave && can('txn.create') && isCatchAllCategory(c))) setView('form');
+  };
+
   // Budget head for the chosen category in the transaction's month. Over-budget entries are
   // allowed; the sheet only warns.
   const budgetCheck = useMemo(() => {
@@ -218,21 +250,101 @@ export function TransactionSheet({
     return { name, inBudget: true as const, planned: line.planned, leftBefore, leftAfter: leftBefore - minor };
   }, [budget.data, categoryId, selectedCategory?.name, budgetMonth, transaction, minor]);
 
+  const title = isEdit ? (canSave ? 'Edit transaction' : 'Transaction details') : 'New transaction';
+
+  if (view === 'categories') {
+    return (
+      <Sheet
+        open={open}
+        onClose={onClose}
+        title="All categories"
+        heading={
+          <button onClick={() => setView('form')} className="-ml-2 flex min-h-9 items-center gap-1.5 rounded-lg px-2 text-body font-semibold hover:bg-subtle">
+            <ArrowLeft className="size-4" /> All categories
+          </button>
+        }
+        footer={
+          offerNewCategory && (
+            <>
+              <form
+                className="space-y-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (newCategory.trim()) addCategory.mutate();
+                }}
+              >
+                <label htmlFor="new-category" className="block text-label text-muted">
+                  Name it to add a new category to this book (optional)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="new-category"
+                    value={newCategory}
+                    onChange={(e) => setNewCategory(e.target.value)}
+                    placeholder={type === 'income' ? 'e.g. Rental income' : 'e.g. Pet care'}
+                    maxLength={40}
+                    autoComplete="off"
+                    className={`${inputClass} min-w-0`}
+                  />
+                  <Button type="submit" variant="secondary" disabled={!newCategory.trim()} loading={addCategory.isPending}>
+                    Add
+                  </Button>
+                </div>
+                <ErrorBanner error={addCategory.error} />
+              </form>
+              <Button className="w-full" onClick={() => setView('form')}>
+                Use {selectedCategory!.name}
+              </Button>
+            </>
+          )
+        }
+      >
+        <div className="space-y-4">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
+            <input
+              type="search"
+              value={categorySearch}
+              onChange={(e) => setCategorySearch(e.target.value)}
+              placeholder="Search categories"
+              aria-label="Search categories"
+              className={`${inputClass} pl-10`}
+            />
+          </div>
+          {categoryGroups.length === 0 && <p className="py-6 text-center text-label text-muted">No category matches that.</p>}
+          {categoryGroups.map(([label, list]) => (
+            <section key={label} aria-label={label || 'Categories'}>
+              {label && <p className="mb-1.5 text-caption font-medium text-muted">{label}</p>}
+              <div className="overflow-hidden rounded-xl border border-line">
+                {list.map((c) => (
+                  <CategoryOption
+                    key={c.id}
+                    category={c}
+                    selected={categoryId === c.id}
+                    disabled={!canSave}
+                    onSelect={() => pickFromList(c)}
+                    line={lineById.get(c.id)}
+                    currency={book.currency}
+                  />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      </Sheet>
+    );
+  }
+
+  const hasFooter = canSave || canDelete || (isEdit && can('txn.create'));
+
   return (
     <Sheet
       open={open}
       onClose={onClose}
-      title={isEdit ? (canSave ? 'Edit transaction' : 'Transaction details') : 'New transaction'}
-    >
-      <div className="space-y-5">
-        {isEdit && (
-          <p className="-mt-1 text-[13px] text-muted">
-            Added by {transaction!.createdByName}
-            {!canSave && ' · read-only for your role'}
-          </p>
-        )}
-
+      title={title}
+      heading={
         <Segmented
+          className="w-48"
           value={type}
           disabled={!canSave}
           onChange={(t) => {
@@ -245,129 +357,155 @@ export function TransactionSheet({
             { value: 'income', label: 'Income' },
           ]}
         />
+      }
+      footer={
+        hasFooter && (
+          <>
+            <ErrorBanner error={save.error ?? remove.error} />
+            {conflict && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={() => {
+                  invalidate();
+                  onClose();
+                }}
+              >
+                Reload latest version
+              </Button>
+            )}
 
-        <div className="rounded-xl border border-line bg-subtle/50 px-4 py-4 text-center" aria-live="polite">
-          <p className="text-xs font-medium text-muted">Amount</p>
-          <p className={`mt-1 text-[34px] leading-tight font-semibold tracking-tight tabular ${amount ? (type === 'income' ? 'text-positive' : 'text-ink') : 'text-muted/50'}`}>
+            <div className="flex gap-2">
+              {canDelete && (
+                <Button
+                  variant="danger"
+                  loading={remove.isPending}
+                  onClick={() => remove.mutate(transaction!.id)}
+                  aria-label="Delete transaction"
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              )}
+              {isEdit && can('txn.create') && (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setAsNew(true);
+                    setDate(todayISO());
+                    setClientId(newClientId());
+                    save.reset();
+                  }}
+                  aria-label="Add again as a new transaction"
+                  title="Add again"
+                >
+                  <CopyPlus className="size-4" />
+                  {!canSave && 'Add again'}
+                </Button>
+              )}
+              {canSave && (
+                <Button className="flex-1" disabled={minor <= 0 || !categoryId || conflict} loading={save.isPending} onClick={() => save.mutate()}>
+                  {isEdit ? 'Save changes' : type === 'income' ? 'Save income' : 'Save expense'}
+                </Button>
+              )}
+            </div>
+          </>
+        )
+      }
+    >
+      <div className="space-y-3 [@media(max-height:720px)]:space-y-2">
+        <div className="text-center">
+          <p aria-live="polite" className={`text-display font-semibold tracking-tight tabular ${amount ? (type === 'income' ? 'text-positive' : 'text-ink') : 'text-muted/50'}`}>
+            <span className="sr-only">Amount </span>
             {formatMoney(minor, book.currency)}
           </p>
+          {isEdit && (
+            <p className="text-caption text-muted">
+              Added by {transaction!.createdByName}
+              {!canSave && ' · read-only for your role'}
+            </p>
+          )}
+          <div className="min-h-[18px]">
+            {canSave && type === 'expense' && budgetCheck && <BudgetHint check={budgetCheck} currency={book.currency} />}
+            {offerNewCategory && (
+              <button onClick={() => setView('categories')} className="text-label font-medium text-accent">
+                Add a new category
+              </button>
+            )}
+          </div>
         </div>
 
         <div>
-          <p className="mb-2 text-sm font-medium">Category</p>
-          {budgetOptions.length > 0 ? (
-            <div className="space-y-3">
-              <section aria-label={`Budget heads for ${monthLabel(budgetMonth)}`}>
-                <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted">
-                  <Wallet className="size-3.5" strokeWidth={2} />
-                  In your {monthLabel(budgetMonth)} budget
-                </p>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                  {budgetOptions.map((c) => (
-                    <CategoryChip
-                      key={c.id}
-                      category={c}
-                      selected={categoryId === c.id}
-                      disabled={!canSave}
-                      onSelect={() => setCategoryId(c.id)}
-                      line={lineById.get(c.id)}
-                      currency={book.currency}
-                    />
-                  ))}
-                </div>
-              </section>
-              {otherOptions.length > 0 && (
-                <section aria-label="Categories not in budget">
-                  <p className="mb-1.5 text-xs font-medium text-muted">Not in budget</p>
-                  <div className="flex flex-wrap gap-2">
-                    {otherOptions.map((c) => (
-                      <CategoryChip
-                        key={c.id}
-                        category={c}
-                        selected={categoryId === c.id}
-                        disabled={!canSave}
-                        onSelect={() => setCategoryId(c.id)}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {options.map((c) => (
-                <CategoryChip
-                  key={c.id}
-                  category={c}
-                  selected={categoryId === c.id}
-                  disabled={!canSave}
-                  onSelect={() => setCategoryId(c.id)}
-                />
-              ))}
-            </div>
-          )}
-
-          {offerNewCategory && (
-            <form
-              className="mt-3 space-y-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (newCategory.trim()) addCategory.mutate();
-              }}
-            >
-              <label htmlFor="new-category" className="block text-[13px] text-muted">
-                Name it to add a new category to this book (optional)
-              </label>
-              <div className="flex gap-2">
-                <input
-                  id="new-category"
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  placeholder={type === 'income' ? 'e.g. Rental income' : 'e.g. Pet care'}
-                  maxLength={40}
-                  autoComplete="off"
-                  className={`${inputClass} min-w-0`}
-                />
-                <Button type="submit" variant="secondary" disabled={!newCategory.trim()} loading={addCategory.isPending}>
-                  Add
-                </Button>
-              </div>
-              <ErrorBanner error={addCategory.error} />
-            </form>
-          )}
+          <div className="mb-1.5 flex items-center justify-between">
+            <p className="text-label font-medium">Category</p>
+            {canSave && options.length > strip.length && (
+              <button onClick={() => setView('categories')} className="-my-1 flex min-h-7 items-center gap-0.5 text-label font-medium text-accent">
+                All {options.length}
+                <ChevronRight className="size-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="no-scrollbar -mx-5 grid auto-cols-[8.5rem] grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto px-5">
+            {strip.map((c) => (
+              <CategoryCell
+                key={c.id}
+                category={c}
+                selected={categoryId === c.id}
+                disabled={!canSave}
+                onSelect={() => setCategoryId(c.id)}
+                line={lineById.get(c.id)}
+                currency={book.currency}
+              />
+            ))}
+          </div>
         </div>
 
-        {canSave && type === 'expense' && budgetCheck && <BudgetHint check={budgetCheck} currency={book.currency} />}
-
-        <div className="grid grid-cols-[auto_1fr] gap-2">
-          <input
-            type="date"
-            value={date}
-            disabled={!canSave}
-            onChange={(e) => setDate(e.target.value)}
-            className={`${inputClass} w-auto!`}
-            aria-label="Date"
-          />
+        <div className="flex gap-2">
+          <label className={`relative flex min-h-11 shrink-0 items-center gap-1 rounded-lg border border-line px-3 text-label font-medium ${canSave ? 'bg-surface' : 'bg-subtle text-muted'}`}>
+            {dateChipLabel(date)}
+            <ChevronDown className="size-3.5 text-muted" />
+            <input
+              type="date"
+              value={date}
+              disabled={!canSave}
+              onChange={(e) => e.target.value && setDate(e.target.value)}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker();
+                } catch {
+                  // Not supported here; the browser's own tap behaviour still opens it.
+                }
+              }}
+              className="absolute inset-0 w-full cursor-pointer opacity-0"
+              aria-label="Date"
+            />
+          </label>
           <input
             value={note}
             disabled={!canSave}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="Note (optional)"
+            placeholder="Note"
             maxLength={200}
-            className={`${inputClass} min-w-0`}
+            className={`${inputClass} min-w-0 flex-1`}
             aria-label="Note"
           />
+          {canSave && !transaction && (
+            <button
+              onClick={() => setRepeat(!repeat)}
+              aria-pressed={repeat}
+              aria-label="Repeat every month"
+              className={`grid size-11 shrink-0 place-items-center rounded-lg border transition-colors ${
+                repeat ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface text-muted hover:text-ink'
+              }`}
+            >
+              <Repeat className="size-4" strokeWidth={1.75} />
+            </button>
+          )}
         </div>
-
-        {canSave && !transaction && (
-          <label className="-mt-2 flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-line px-3 text-sm">
-            <Repeat className="size-4 shrink-0 text-muted" strokeWidth={1.75} />
-            <span className="min-w-0 flex-1">
-              Repeat every month on the {ordinal(Number(date.slice(8, 10)))}
-              {Number(date.slice(8, 10)) > 28 && <span className="block text-xs text-muted">Or the last day in shorter months</span>}
-            </span>
-            <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} className="size-4.5 accent-(--app-primary)" />
-          </label>
+        {repeat && canSave && !transaction && (
+          <p className="text-caption text-muted">
+            Every month on the {ordinal(Number(date.slice(8, 10)))}
+            {Number(date.slice(8, 10)) > 28 && ', or the last day in shorter months'}
+          </p>
         )}
 
         {canSave && (
@@ -376,7 +514,7 @@ export function TransactionSheet({
               <button
                 key={k}
                 onClick={() => setAmount((a) => applyKey(a, k))}
-                className="grid h-12 place-items-center rounded-lg bg-subtle text-xl font-medium tabular hover:bg-line/60 active:bg-line"
+                className="grid h-12 place-items-center rounded-lg bg-subtle text-title font-medium tabular hover:bg-line/60 active:bg-line [@media(max-height:720px)]:h-10"
                 aria-label={k === 'back' ? 'Delete digit' : k}
               >
                 {k === 'back' ? <Delete className="size-5" strokeWidth={1.75} /> : k}
@@ -384,64 +522,18 @@ export function TransactionSheet({
             ))}
           </div>
         )}
-
-        {/* Pinned to the bottom so Save stays reachable above the keypad on small phones. */}
-        <div className="sticky bottom-0 -mx-5 space-y-2 border-t border-line bg-surface px-5 pt-3">
-          <ErrorBanner error={save.error ?? remove.error} />
-          {conflict && (
-            <Button
-              variant="secondary"
-              className="w-full"
-              onClick={() => {
-                invalidate();
-                onClose();
-              }}
-            >
-              Reload latest version
-            </Button>
-          )}
-
-          <div className="flex gap-2">
-            {canDelete && (
-              <Button
-                variant="danger"
-                loading={remove.isPending}
-                onClick={() => remove.mutate(transaction!.id)}
-                aria-label="Delete transaction"
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            )}
-            {isEdit && can('txn.create') && (
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setAsNew(true);
-                  setDate(todayISO());
-                  setClientId(newClientId());
-                  save.reset();
-                }}
-                aria-label="Add again as a new transaction"
-                title="Add again"
-              >
-                <CopyPlus className="size-4" />
-                {!canSave && 'Add again'}
-              </Button>
-            )}
-            {canSave && (
-              <Button className="flex-1" disabled={minor <= 0 || !categoryId || conflict} loading={save.isPending} onClick={() => save.mutate()}>
-                {isEdit ? 'Save changes' : type === 'income' ? 'Save income' : 'Save expense'}
-              </Button>
-            )}
-          </div>
-        </div>
       </div>
     </Sheet>
   );
 }
 
-/** A category button. Budget heads (`line` given) also show what's left and a usage bar. */
-function CategoryChip({
+function leftLabel(line: BudgetLineDTO, currency: string): string {
+  const left = line.planned - line.spent;
+  return left >= 0 ? `${formatMoney(left, currency)} left` : `${formatMoney(-left, currency)} over`;
+}
+
+/** A quick-pick button. Budget heads (`line` given) also show what's left. */
+function CategoryCell({
   category,
   selected,
   disabled,
@@ -454,47 +546,66 @@ function CategoryChip({
   disabled: boolean;
   onSelect: () => void;
   line?: BudgetLineDTO;
-  currency?: string;
+  currency: string;
 }) {
-  const Icon = categoryIcon(category);
-  const tone = selected ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface hover:bg-subtle';
-  if (!line) {
-    return (
-      <button
-        disabled={disabled}
-        onClick={onSelect}
-        aria-pressed={selected}
-        className={`flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-sm transition-colors ${tone}`}
-      >
-        <Icon className="size-4" strokeWidth={1.75} style={selected ? undefined : { color: category.color }} />
-        {category.name}
-      </button>
-    );
-  }
-  const status = lineStatus(line);
-  const left = line.planned - line.spent;
   return (
     <button
       disabled={disabled}
       onClick={onSelect}
       aria-pressed={selected}
-      className={`flex min-w-0 flex-col gap-1 rounded-lg border px-2.5 py-2 text-left text-sm transition-colors ${tone}`}
+      className={`flex h-12 min-w-0 flex-col justify-center rounded-lg border px-2.5 text-left text-label transition-colors ${
+        selected ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface hover:bg-subtle'
+      }`}
     >
       <span className="flex min-w-0 items-center gap-1.5 font-medium">
-        <Icon className="size-4 shrink-0" strokeWidth={1.75} style={selected ? undefined : { color: category.color }} />
+        <CategoryGlyph category={category} selected={selected} />
         <span className="truncate">{category.name}</span>
       </span>
-      <span className={`text-xs tabular ${selected ? 'text-primary-fg/80' : statusText[status]}`}>
-        {left >= 0 ? `${formatMoney(left, currency!)} left` : `${formatMoney(-left, currency!)} over`}
-      </span>
-      <span className={`h-1 w-full overflow-hidden rounded-full ${selected ? 'bg-primary-fg/25' : 'bg-subtle'}`} aria-hidden>
-        <span
-          className={`block h-full rounded-full ${selected ? 'bg-primary-fg' : statusBar[status]}`}
-          style={{ width: `${usedPct(line)}%` }}
-        />
-      </span>
+      {line && (
+        <span className={`truncate text-caption tabular ${selected ? 'text-primary-fg/80' : statusText[lineStatus(line)]}`}>{leftLabel(line, currency)}</span>
+      )}
     </button>
   );
+}
+
+/** A row in the full category list. */
+function CategoryOption({
+  category,
+  selected,
+  disabled,
+  onSelect,
+  line,
+  currency,
+}: {
+  category: CategoryDTO;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+  line?: BudgetLineDTO;
+  currency: string;
+}) {
+  return (
+    <button
+      disabled={disabled}
+      onClick={onSelect}
+      aria-pressed={selected}
+      className="flex min-h-12 w-full items-center gap-3 border-b border-line px-3 text-left text-body last:border-b-0 hover:bg-subtle"
+    >
+      <CategoryTile category={category} size="sm" />
+      <span className="min-w-0 flex-1 truncate">{category.name}</span>
+      {line && <span className={`shrink-0 text-label tabular ${statusText[lineStatus(line)]}`}>{leftLabel(line, currency)}</span>}
+      {selected && <Check className="size-4 shrink-0 text-accent" />}
+    </button>
+  );
+}
+
+/** "Today" or "28 Oct", with the year when it isn't this year's. */
+function dateChipLabel(date: string): string {
+  const today = todayISO();
+  if (date === today) return 'Today';
+  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
+  const sameYear = date.slice(0, 4) === today.slice(0, 4);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) });
 }
 
 /** 1 → "1st", 22 → "22nd". */
@@ -511,31 +622,24 @@ type BudgetCheck =
 function BudgetHint({ check, currency }: { check: BudgetCheck; currency: string }) {
   const money = (n: number) => formatMoney(n, currency);
   if (!check.inBudget) {
-    return <p className="-mt-2 text-[13px] text-muted">{check.name} isn't a budget head in {check.monthName}.</p>;
+    return <p className="text-label text-muted">{check.name} isn't a budget head in {check.monthName}.</p>;
   }
   if (check.leftAfter < 0) {
     const alreadyOver = check.leftBefore <= 0;
     return (
-      <div role="status" className="-mt-2 flex gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5 text-[13px] text-warning">
-        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-        <p>
-          <strong className="font-semibold">
-            {alreadyOver
-              ? `${check.name} is already ${money(-check.leftBefore)} over budget.`
-              : `This goes ${money(-check.leftAfter)} over your ${check.name} budget.`}
-          </strong>{' '}
+      <p role="status" className="text-label text-warning">
+        <AlertTriangle className="mr-1 inline size-3.5 align-[-2px]" />
+        <strong className="font-semibold">
           {alreadyOver
-            ? ''
-            : check.leftBefore === check.planned
-              ? `Your ${check.name} limit is ${money(check.planned)}. `
-              : `Only ${money(check.leftBefore)} of ${money(check.planned)} was left. `}
-          You can still save it.
-        </p>
-      </div>
+            ? `${check.name} is already ${money(-check.leftBefore)} over budget.`
+            : `This goes ${money(-check.leftAfter)} over your ${check.name} budget.`}
+        </strong>{' '}
+        You can still save it.
+      </p>
     );
   }
   return (
-    <p className="-mt-2 text-[13px] text-muted tabular">
+    <p className="text-label text-muted tabular">
       {money(check.leftAfter)} left in {check.name} after this · limit {money(check.planned)}
     </p>
   );

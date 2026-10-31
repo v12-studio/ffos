@@ -1,18 +1,28 @@
 import {
+  Apple,
   Baby,
+  Bike,
   BookOpen,
   Briefcase,
+  Bus,
   Car,
+  Carrot,
   Clapperboard,
   Coffee,
+  CreditCard,
   Droplet,
+  Drumstick,
   Dumbbell,
   Fuel,
   Gift,
   GraduationCap,
+  HandCoins,
   HeartPulse,
+  Hospital,
   House,
   Landmark,
+  Mail,
+  Milk,
   Package,
   PawPrint,
   PiggyBank,
@@ -29,12 +39,14 @@ import {
   TrendingUp,
   Tv,
   Utensils,
+  Wallet,
   Wifi,
   Wrench,
   Zap,
   type LucideIcon,
 } from 'lucide-react';
 import type { CategoryDTO } from '@ffos/shared';
+import { nameHue } from './ui.tsx';
 
 const ICONS: Record<string, LucideIcon> = {
   cart: ShoppingCart,
@@ -70,6 +82,17 @@ const ICONS: Record<string, LucideIcon> = {
   gift: Gift,
   bill: Receipt,
   care: Sparkles,
+  milk: Milk,
+  vegetable: Carrot,
+  fruit: Apple,
+  meat: Drumstick,
+  card: CreditCard,
+  hospital: Hospital,
+  post: Mail,
+  savings: HandCoins,
+  wallet: Wallet,
+  bike: Bike,
+  bus: Bus,
 };
 
 /** Icon keys offered when editing a category, in picker order. */
@@ -109,13 +132,28 @@ export function categoryIcon(category?: Pick<CategoryDTO, 'icon' | 'name'>): Luc
   return ICONS[category.icon] ?? BY_NAME[category.name] ?? Tag;
 }
 
+// New categories default to this grey and the generic tag.
+const DEFAULT_COLOR = '#64748b';
+
+/** A category still on the generic tag says nothing, so it's shown by its first letter instead. */
+function monogram(category?: Pick<CategoryDTO, 'icon' | 'name'>): string | null {
+  return category && categoryIcon(category) === Tag ? (category.name.trim()[0]?.toUpperCase() ?? '?') : null;
+}
+
+/** The category's colour, or one derived from its name when it still has the default grey and tag. */
+function tileColor(category?: CategoryDTO): string {
+  if (!category) return DEFAULT_COLOR;
+  return monogram(category) && category.color === DEFAULT_COLOR ? `hsl(${nameHue(category.name)} 45% 38%)` : category.color;
+}
+
 /** Square tile with the category's icon on a light tint of its colour. */
 export function CategoryTile({ category, size = 'md' }: { category?: CategoryDTO; size?: 'sm' | 'md' }) {
   const Icon = categoryIcon(category);
-  const color = category?.color ?? '#64748b';
+  const color = tileColor(category);
+  const letter = monogram(category);
   return (
     <span
-      className={`grid shrink-0 place-items-center rounded-lg ${size === 'sm' ? 'size-7' : 'size-10'}`}
+      className={`grid shrink-0 place-items-center rounded-lg ${size === 'sm' ? 'size-7 text-label' : 'size-9 text-body'} font-semibold`}
       style={{
         backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`,
         // Blend toward the text colour so dark hues stay legible in dark mode.
@@ -123,7 +161,21 @@ export function CategoryTile({ category, size = 'md' }: { category?: CategoryDTO
       }}
       aria-hidden
     >
-      <Icon className={size === 'sm' ? 'size-4' : 'size-5'} strokeWidth={1.75} />
+      {letter ?? <Icon className={size === 'sm' ? 'size-4' : 'size-5'} strokeWidth={1.75} />}
     </span>
+  );
+}
+
+/** Bare icon or letter for inside a chip. On a selected chip it takes the chip's text colour. */
+export function CategoryGlyph({ category, selected }: { category: CategoryDTO; selected?: boolean }) {
+  const Icon = categoryIcon(category);
+  const letter = monogram(category);
+  const color = selected ? undefined : `color-mix(in srgb, ${tileColor(category)} 78%, var(--app-ink))`;
+  return letter ? (
+    <span className="grid size-4 shrink-0 place-items-center text-label font-semibold" style={{ color }} aria-hidden>
+      {letter}
+    </span>
+  ) : (
+    <Icon className="size-4 shrink-0" strokeWidth={1.75} style={{ color }} aria-hidden />
   );
 }

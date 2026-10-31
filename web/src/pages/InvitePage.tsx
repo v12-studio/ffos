@@ -102,9 +102,9 @@ function JoinAsNewOrExisting({ token, invite }: { token: string; invite: InviteP
   if (mode === 'login') {
     return (
       <>
-        <p className="mb-4 text-center text-sm text-muted">Sign in, then accept the invite.</p>
+        <p className="mb-4 text-center text-label text-muted">Sign in, then accept the invite.</p>
         <LoginForm />
-        <p className="mt-4 text-center text-sm">
+        <p className="mt-4 text-center text-label">
           New to FFOS?{' '}
           <button className="font-medium text-accent" onClick={() => setMode('register')}>
             Create an account
@@ -135,7 +135,7 @@ function JoinAsNewOrExisting({ token, invite }: { token: string; invite: InviteP
       <Button type="submit" className="w-full" loading={register.isPending}>
         Create account & join
       </Button>
-      <p className="text-center text-sm">
+      <p className="text-center text-label">
         Already have an account?{' '}
         <button type="button" className="font-medium text-accent" onClick={() => setMode('login')}>
           Sign in

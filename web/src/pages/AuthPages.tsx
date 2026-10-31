@@ -73,7 +73,7 @@ export function LoginPage() {
   return (
     <AuthLayout title="Sign in" subtitle="Family Finance OS">
       <LoginForm />
-      <p className="mt-4 text-center text-sm">
+      <p className="mt-4 text-center text-label">
         <Link to="/recover" className="font-medium text-accent">
           Forgot password?
         </Link>
@@ -93,7 +93,7 @@ export function RecoverPage() {
   if (mutation.isSuccess) {
     return (
       <AuthLayout title="Password reset" subtitle="You've been signed out on all devices.">
-        <p className="mb-4 text-center text-sm text-muted">
+        <p className="mb-4 text-center text-label text-muted">
           You have {mutation.data.remainingCodes} recovery code{mutation.data.remainingCodes === 1 ? '' : 's'} left.
         </p>
         <Button className="w-full" onClick={() => navigate('/login')}>
@@ -118,7 +118,7 @@ export function RecoverPage() {
         <Button type="submit" className="w-full" loading={mutation.isPending}>
           Reset password
         </Button>
-        <p className="text-center text-sm">
+        <p className="text-center text-label">
           <Link to="/login" className="font-medium text-accent">
             Back to sign in
           </Link>
@@ -135,7 +135,7 @@ export function RecoveryCodesScreen({ codes, onDone }: { codes: string[]; onDone
 
   return (
     <AuthLayout title="Save your recovery codes" subtitle="If you forget your password, each code can reset it once. They won't be shown again.">
-      <div className="mb-5 grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-xl border border-line bg-subtle/60 p-5 font-mono text-[15px]">
+      <div className="mb-5 grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-xl border border-line bg-subtle/60 p-5 font-mono text-body">
         {codes.map((c) => (
           <span key={c} className="text-center tracking-wider">
             {c}
@@ -154,7 +154,7 @@ export function RecoveryCodesScreen({ codes, onDone }: { codes: string[]; onDone
           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
           {copied ? 'Copied' : 'Copy codes'}
         </Button>
-        <label className="flex items-center gap-3 rounded-xl px-1 py-2 text-sm">
+        <label className="flex items-center gap-3 rounded-xl px-1 py-2 text-label">
           <input type="checkbox" className="size-4.5 accent-[var(--app-primary)]" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
           I've saved these codes somewhere safe
         </label>

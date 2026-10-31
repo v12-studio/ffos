@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, House, List, PiggyBank, Plus, Settings, Users } from 'lucide-react';
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { NavLink, Outlet } from 'react-router';
+import { NavLink, Outlet, useMatch } from 'react-router';
 import { formatMoney, type BookDTO, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
@@ -31,6 +31,8 @@ export function AppShell() {
   const [sheet, setSheet] = useState<{ open: boolean; txn: TransactionDTO | null }>({ open: false, txn: null });
   const openTransaction = (txn?: TransactionDTO) => setSheet({ open: true, txn: txn ?? null });
   const canAdd = can('txn.create');
+  // The plan editor has its own bottom bar for the total and Save.
+  const hideTabBar = useMatch('/budget/:month/edit') !== null;
 
   const bookSwitcher = (
     <button
@@ -39,7 +41,7 @@ export function AppShell() {
       aria-label={`Current book: ${book.name}. Switch book`}
     >
       <span className="size-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: book.color }} />
-      <span className="truncate text-[15px] font-semibold">{book.name}</span>
+      <span className="truncate text-body font-semibold">{book.name}</span>
       <ChevronsUpDown className="size-4 shrink-0 text-muted" />
     </button>
   );
@@ -51,7 +53,7 @@ export function AppShell() {
         <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-line bg-surface px-3 py-4 lg:flex">
           <div className="mb-5 flex items-center gap-2.5 px-2">
             <Logo className="size-6" />
-            <span className="text-sm font-semibold tracking-tight">Family Finance OS</span>
+            <span className="text-label font-semibold tracking-tight">Family Finance OS</span>
           </div>
           <div className="mb-4 rounded-lg border border-line">{bookSwitcher}</div>
           <nav className="flex flex-col gap-0.5">
@@ -61,7 +63,7 @@ export function AppShell() {
                 to={to}
                 end={end}
                 className={({ isActive }) =>
-                  `flex min-h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm font-medium transition-colors ${
+                  `flex min-h-9 items-center gap-2.5 rounded-lg px-2.5 text-label font-medium transition-colors ${
                     isActive ? 'bg-subtle text-ink' : 'text-muted hover:bg-subtle hover:text-ink'
                   }`
                 }
@@ -78,12 +80,14 @@ export function AppShell() {
         </aside>
 
         <div className="min-w-0 flex-1">
-          <header className="sticky top-0 z-30 border-b border-line bg-surface/90 pt-safe backdrop-blur-md lg:hidden">
+          <header className="sticky top-0 z-30 border-b border-line bg-surface pt-safe lg:hidden">
             <div className="mx-auto flex h-14 max-w-2xl items-center gap-2 px-2">
               {bookSwitcher}
-              <span className="ml-auto pr-2">
-                <RoleBadge role={book.role} />
-              </span>
+              {book.role !== 'owner' && (
+                <span className="ml-auto pr-2">
+                  <RoleBadge role={book.role} />
+                </span>
+              )}
             </div>
           </header>
 
@@ -94,7 +98,7 @@ export function AppShell() {
         </div>
 
         {/* mobile tab bar */}
-        <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 pb-safe backdrop-blur-md lg:hidden">
+        <nav className={`fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface pb-safe lg:hidden ${hideTabBar ? 'hidden' : ''}`}>
           <div className="mx-auto grid h-16 max-w-2xl grid-cols-5 items-center">
             {NAV.slice(0, 2).map((item) => (
               <TabLink key={item.to} {...item} />
@@ -129,7 +133,7 @@ function TabLink({ to, label, icon: Icon, end }: (typeof NAV)[number]) {
       to={to}
       end={end}
       className={({ isActive }) =>
-        `flex h-full flex-col items-center justify-center gap-1 text-[11px] font-medium ${isActive ? 'text-ink' : 'text-muted'}`
+        `flex h-full flex-col items-center justify-center gap-1 text-micro font-medium ${isActive ? 'text-ink' : 'text-muted'}`
       }
     >
       {({ isActive }) => (
@@ -173,8 +177,8 @@ function BooksSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
           >
             <span className="size-2.5 shrink-0 rounded-[3px]" style={{ backgroundColor: b.color }} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[15px] font-medium">{b.name}</span>
-              <span className="text-xs text-muted">
+              <span className="block truncate text-body font-medium">{b.name}</span>
+              <span className="text-caption text-muted">
                 {b.isPersonal ? 'Private' : `${b.memberCount} member${b.memberCount === 1 ? '' : 's'}`} · {b.currency}
               </span>
             </span>
@@ -213,14 +217,22 @@ function BooksSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
+/** "Nov 2026": short enough to sit beside any page title. */
+function shortMonthLabel(month: string): string {
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+}
+
 export function MonthSwitcher({ month, onChange }: { month: string; onChange: (m: string) => void }) {
-  const btn = 'grid size-9 place-items-center rounded-lg border border-line bg-surface text-muted hover:text-ink';
+  const btn = 'grid size-11 place-items-center text-muted hover:text-ink';
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex shrink-0 items-center rounded-lg border border-line bg-surface">
       <button onClick={() => onChange(shiftMonth(month, -1))} className={btn} aria-label="Previous month">
         <ChevronLeft className="size-4" />
       </button>
-      <span className="min-w-36 text-center text-sm font-semibold">{monthLabel(month)}</span>
+      <span className="min-w-[4.75rem] text-center text-label font-semibold whitespace-nowrap" aria-label={monthLabel(month)}>
+        {shortMonthLabel(month)}
+      </span>
       <button onClick={() => onChange(shiftMonth(month, 1))} className={btn} aria-label="Next month">
         <ChevronRight className="size-4" />
       </button>
@@ -249,26 +261,32 @@ export function TransactionRow({
   showDate?: boolean;
 }) {
   const open = useOpenTransaction();
+  const { book } = useCurrentBook();
+  const detail = [
+    txn.note ? category?.name : null,
+    showDate ? dayLabel(txn.date) : null,
+    book.memberCount > 1 ? `by ${txn.createdByName}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <button onClick={() => open(txn)} className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-subtle/60 active:bg-subtle">
       <CategoryTile category={category} />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[15px] font-medium">{txn.note || category?.name || 'Transaction'}</span>
-        <span className="block truncate text-[13px] text-muted">
-          {[txn.note ? category?.name : null, showDate ? dayLabel(txn.date) : null, txn.createdByName].filter(Boolean).join(' · ')}
-        </span>
+        <span className="block truncate text-body font-medium">{txn.note || category?.name || 'Transaction'}</span>
+        {detail && <span className="block truncate text-label text-muted">{detail}</span>}
       </span>
-      <Amount txn={txn} currency={currency} className="shrink-0 text-[15px]" />
+      <Amount txn={txn} currency={currency} className="shrink-0 text-body" />
     </button>
   );
 }
 
 export function PageTitle({ children, action, subtitle }: { children: ReactNode; action?: ReactNode; subtitle?: ReactNode }) {
   return (
-    <div className="mb-5 flex items-end justify-between gap-3">
+    <div className="mb-5 flex items-center justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight lg:text-2xl">{children}</h1>
-        {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
+        <h1 className="text-title font-semibold tracking-tight">{children}</h1>
+        {subtitle && <p className="mt-0.5 text-label text-muted">{subtitle}</p>}
       </div>
       {action}
     </div>

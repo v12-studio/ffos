@@ -41,7 +41,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             role="status"
             aria-live="polite"
-            className="pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-xl bg-primary py-2.5 pr-2 pl-4 text-sm text-primary-fg shadow-lg"
+            className="pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-xl bg-primary py-2.5 pr-2 pl-4 text-label text-primary-fg shadow-lg"
           >
             <span className="min-w-0 flex-1">{toast.message}</span>
             {toast.action && (

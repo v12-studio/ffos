@@ -60,12 +60,12 @@ export function RecurringDueCard({ month }: { month: string }) {
           <Repeat className="size-4" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[15px] font-semibold">
+          <p className="text-body font-semibold">
             {items.length} monthly entr{items.length === 1 ? 'y' : 'ies'} due
           </p>
-          <p className="text-[13px] text-muted">{canAdd ? `Add ${items.length === 1 ? 'it' : 'them'} to this month?` : 'Someone who can add entries can record them.'}</p>
+          <p className="text-label text-muted">{canAdd ? `Add ${items.length === 1 ? 'it' : 'them'} to this month?` : 'Someone who can add entries can record them.'}</p>
         </div>
-        <Link to="/recurring" className="shrink-0 text-[13px] font-medium text-accent">
+        <Link to="/recurring" className="shrink-0 text-label font-medium text-accent">
           Manage
         </Link>
       </div>
@@ -92,15 +92,15 @@ export function RecurringDueCard({ month }: { month: string }) {
                   className="size-4.5 shrink-0 accent-(--app-primary)"
                 />
               )}
-              <CategoryTile category={cat} size="sm" />
+              <CategoryTile category={cat} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{r.note || cat?.name || 'Monthly entry'}</span>
-                <span className="block truncate text-xs text-muted">
+                <span className="block truncate text-label font-medium">{r.note || cat?.name || 'Monthly entry'}</span>
+                <span className="block truncate text-caption text-muted">
                   {shortDate(date)}
                   {r.note && cat ? ` · ${cat.name}` : ''}
                 </span>
               </span>
-              <span className={`shrink-0 text-sm font-semibold tabular ${r.type === 'income' ? 'text-positive' : ''}`}>
+              <span className={`shrink-0 text-label font-semibold tabular ${r.type === 'income' ? 'text-positive' : ''}`}>
                 {r.type === 'income' ? '+' : '−'}
                 {money(r.amount)}
               </span>
@@ -108,7 +108,7 @@ export function RecurringDueCard({ month }: { month: string }) {
                 <button
                   onClick={() => skip.mutate(r.id)}
                   disabled={skip.isPending}
-                  className="min-h-9 shrink-0 rounded-lg px-2 text-xs font-medium text-muted hover:bg-subtle hover:text-ink"
+                  className="min-h-9 shrink-0 rounded-lg px-2 text-caption font-medium text-muted hover:bg-subtle hover:text-ink"
                   aria-label={`Skip ${r.note || cat?.name || 'entry'} this month`}
                 >
                   Skip

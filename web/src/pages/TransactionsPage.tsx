@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ReceiptText, Search, Trash2, X } from 'lucide-react';
+import { ChevronDown, ReceiptText, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { useSearchParams } from 'react-router';
 import { formatMoney, type CategoryDTO, type TransactionDTO, type TransactionSearchDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { Card, EmptyState, ErrorBanner, inputClass, Segmented, Sheet, Spinner } from '../components/ui.tsx';
+import { Card, Chip, EmptyState, ErrorBanner, inputClass, PageSkeleton, Sheet } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
@@ -31,7 +31,7 @@ const netOf = (rows: TransactionDTO[]) => rows.reduce((sum, t) => sum + (t.type 
  * ?scope=all to search every month instead of one.
  */
 export function TransactionsPage() {
-  const { book, can } = useCurrentBook();
+  const { book } = useCurrentBook();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const month = params.get('month') ?? currentMonth();
@@ -99,16 +99,14 @@ export function TransactionsPage() {
     return [...map.entries()];
   }, [rows, scope]);
 
+  // No chip selected means everything; tapping the selected one clears it.
   const chips: [Filter, string][] = [
-    ['all', 'All'],
     ['expense', 'Expenses'],
     ['income', 'Income'],
-    ['mine', 'Added by me'],
+    ['mine', 'Mine'],
   ];
-  const chipClass = (on: boolean) =>
-    `flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-[13px] font-medium transition-colors ${
-      on ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface text-muted hover:text-ink'
-    }`;
+  const totalIn = rows.reduce((sum, t) => sum + (t.type === 'income' ? t.amount : 0), 0);
+  const totalOut = rows.reduce((sum, t) => sum + (t.type === 'expense' ? t.amount : 0), 0);
   const narrowed = Boolean(search || filter !== 'all' || categoryId);
 
   return (
@@ -117,57 +115,57 @@ export function TransactionsPage() {
         Transactions
       </PageTitle>
 
-      <div className="space-y-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={scope === 'all' ? 'Search every month: notes, categories, people' : 'Search notes, categories, people'}
-            className={`${inputClass} pl-10`}
-          />
-        </div>
-        <Segmented
-          value={scope}
-          onChange={(s) => setParam('scope', s === 'all' ? 'all' : null)}
-          options={[
-            { value: 'month', label: monthLabel(month) },
-            { value: 'all', label: 'All months' },
-          ]}
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={scope === 'all' ? 'Search every month: notes, categories, people' : 'Search notes, categories, people'}
+          className={`${inputClass} pl-10`}
         />
       </div>
 
-      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1">
+      {/* Fades at the edge so a chip cut off by the screen reads as "scroll for more". */}
+      <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto pr-8 pl-4 [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] lg:mx-0 lg:px-0 lg:[mask-image:none]">
+        {chips.map(([value, label]) => (
+          <Chip key={value} selected={filter === value} onClick={() => setFilter(filter === value ? 'all' : value)}>
+            {label}
+          </Chip>
+        ))}
         {category ? (
-          <button onClick={() => setParam('category', null)} className={chipClass(true)} aria-label={`Showing ${category.name} only. Clear`}>
+          <Chip selected onClick={() => setParam('category', null)} aria-label={`Showing ${category.name} only. Clear`}>
             {category.name}
             <X className="size-3.5" />
-          </button>
+          </Chip>
         ) : (
-          <button onClick={() => setPickingCategory(true)} className={chipClass(false)}>
+          <Chip onClick={() => setPickingCategory(true)}>
             Category <ChevronDown className="size-3.5" />
-          </button>
+          </Chip>
         )}
-        {chips.map(([value, label]) => (
-          <button key={value} onClick={() => setFilter(value)} className={chipClass(filter === value)}>
-            {label}
-          </button>
-        ))}
+        <Chip selected={scope === 'all'} onClick={() => setParam('scope', scope === 'all' ? null : 'all')}>
+          All months
+        </Chip>
       </div>
 
-      {category && rows.length > 0 && (
-        <p className="-mt-2 px-0.5 text-[13px] text-muted tabular">
+      {category && rows.length > 0 ? (
+        <p className="-mt-2 px-0.5 text-label text-muted tabular">
           {rows.length} entr{rows.length === 1 ? 'y' : 'ies'} · {formatMoney(Math.abs(netOf(rows)), book.currency)}{' '}
           {scope === 'month' ? `in ${monthLabel(month)}` : allTxns.data?.truncated ? 'in the latest matches' : 'in total'}
         </p>
+      ) : (
+        rows.length > 0 &&
+        !(scope === 'all' && allTxns.data?.truncated) && (
+          <p className="-mt-2 px-0.5 text-label text-muted tabular">
+            In <span className="font-semibold text-ink">{formatMoney(totalIn, book.currency)}</span> · Out{' '}
+            <span className="font-semibold text-ink">{formatMoney(totalOut, book.currency)}</span>
+          </p>
+        )
       )}
 
       <ErrorBanner error={active.error} />
       {active.isLoading ? (
-        <div className="grid h-40 place-items-center text-muted">
-          <Spinner />
-        </div>
+        <PageSkeleton />
       ) : groups.length === 0 ? (
         <Card>
           <EmptyState
@@ -186,12 +184,15 @@ export function TransactionsPage() {
           const net = netOf(groupRows);
           return (
             <section key={key}>
-              <div className="mb-2 flex justify-between px-0.5 text-[13px]">
+              <div className="mb-2 flex justify-between px-0.5 text-label">
                 <span className="font-semibold text-muted">{scope === 'all' ? monthLabel(key) : dayLabel(key)}</span>
-                <span className="text-muted tabular">
-                  {net < 0 ? '−' : '+'}
-                  {formatMoney(Math.abs(net), book.currency)}
-                </span>
+                {/* With one entry this would just repeat its amount. */}
+                {groupRows.length > 1 && (
+                  <span className="text-muted tabular">
+                    {net < 0 ? '−' : '+'}
+                    {formatMoney(Math.abs(net), book.currency)}
+                  </span>
+                )}
               </div>
               <Card className="divide-y divide-line overflow-hidden">
                 {groupRows.map((t) => (
@@ -204,16 +205,7 @@ export function TransactionsPage() {
       )}
 
       {scope === 'all' && allTxns.data?.truncated && (
-        <p className="px-0.5 text-center text-[13px] text-muted">Showing the latest 200 matches. Search for something more specific to see older ones.</p>
-      )}
-
-      {can('txn.delete.own') && (
-        <Link
-          to="/transactions/deleted"
-          className="flex min-h-11 items-center justify-center gap-2 rounded-lg text-sm font-medium text-muted hover:bg-subtle hover:text-ink"
-        >
-          <Trash2 className="size-4" /> Recently deleted
-        </Link>
+        <p className="px-0.5 text-center text-label text-muted">Showing the latest 200 matches. Search for something more specific to see older ones.</p>
       )}
 
       <CategoryPickerSheet
@@ -252,15 +244,15 @@ function CategoryPickerSheet({
           .filter(([, list]) => list.length)
           .map(([label, list]) => (
             <section key={label}>
-              <p className="mb-1.5 text-xs font-medium text-muted">{label}</p>
+              <p className="mb-1.5 text-caption font-medium text-muted">{label}</p>
               <div className="overflow-hidden rounded-xl border border-line">
                 {list.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => onPick(c.id)}
-                    className="flex min-h-12 w-full items-center gap-3 border-b border-line px-3 text-left text-[15px] last:border-b-0 hover:bg-subtle"
+                    className="flex min-h-12 w-full items-center gap-3 border-b border-line px-3 text-left text-body last:border-b-0 hover:bg-subtle"
                   >
-                    <CategoryTile category={c} size="sm" />
+                    <CategoryTile category={c} />
                     {c.name}
                   </button>
                 ))}

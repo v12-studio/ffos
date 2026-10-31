@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Crown, FileJson, FileSpreadsheet, History, Lock, LogOut, Share2, Trash2, UserPlus, X } from 'lucide-react';
+import { Check, Copy, Crown, Download, FileJson, FileSpreadsheet, History, Lock, LogOut, Settings2, Share2, Trash2, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   ASSIGNABLE_ROLES,
@@ -16,7 +16,7 @@ import { PageTitle } from '../components/AppShell.tsx';
 import { PhoneField } from '../components/auth-ui.tsx';
 import { useConfirm } from '../components/Confirm.tsx';
 import { useToast } from '../components/Toast.tsx';
-import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
+import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, ListRow, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
 import { api, download } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
@@ -27,11 +27,14 @@ export function MembersPage() {
   const { user } = useAuth();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [selected, setSelected] = useState<MemberDTO | null>(null);
+  const [panel, setPanel] = useState<'activity' | 'export' | 'book' | null>(null);
+  const closePanel = () => setPanel(null);
   const members = useQuery({
     queryKey: ['book', book.id, 'members'],
     queryFn: () => api.get<MemberDTO[]>(`/books/${book.id}/members`),
   });
   const canInvite = can('members.invite') && !book.isPersonal;
+  const canBookSettings = can('book.settings') || book.role !== 'owner' || (can('book.delete') && !book.isPersonal);
 
   const isTappable = (m: MemberDTO) =>
     m.userId !== user!.id &&
@@ -54,7 +57,7 @@ export function MembersPage() {
       {book.isPersonal && (
         <Card className="flex gap-3 p-4">
           <Lock className="mt-0.5 size-4 shrink-0 text-muted" />
-          <p className="text-sm text-muted">
+          <p className="text-label text-muted">
             <strong className="font-semibold text-ink">Personal is private to you.</strong> To share expenses with
             family, tap the book name at the top and create a new book, then invite people to it.
           </p>
@@ -76,11 +79,11 @@ export function MembersPage() {
               <>
                 <Avatar name={m.name} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px] font-medium">
+                  <span className="block truncate text-body font-medium">
                     {m.name}
                     {m.userId === user!.id && <span className="font-normal text-muted"> (you)</span>}
                   </span>
-                  <span className="block text-xs text-muted tabular">{m.phone}</span>
+                  <span className="block text-caption text-muted tabular">{m.phone}</span>
                 </span>
                 <RoleBadge role={m.role} />
               </>
@@ -99,9 +102,26 @@ export function MembersPage() {
       </section>
 
       {canInvite && <PendingInvites />}
-      {can('activity.view') && <ActivityFeed />}
-      {can('book.export') && <ExportBook />}
-      <BookSettings />
+      {(can('activity.view') || can('book.export') || canBookSettings) && (
+        <section>
+          <SectionTitle>Manage</SectionTitle>
+          <Card className="divide-y divide-line overflow-hidden">
+            {can('activity.view') && <ListRow icon={History} title="Activity" detail="Who changed what in this book" onClick={() => setPanel('activity')} />}
+            {can('book.export') && <ListRow icon={Download} title="Export" detail="Spreadsheet or full backup" onClick={() => setPanel('export')} />}
+            {canBookSettings && <ListRow icon={Settings2} title="Book settings" detail={`${book.name} · ${book.currency}`} onClick={() => setPanel('book')} />}
+          </Card>
+        </section>
+      )}
+
+      <Sheet open={panel === 'activity'} onClose={closePanel} title="Activity">
+        <ActivityFeed />
+      </Sheet>
+      <Sheet open={panel === 'export'} onClose={closePanel} title="Export">
+        <ExportBook />
+      </Sheet>
+      <Sheet open={panel === 'book'} onClose={closePanel} title="Book settings">
+        <BookSettings onDone={closePanel} />
+      </Sheet>
 
       <InviteSheet open={inviteOpen} onClose={() => setInviteOpen(false)} />
       <MemberSheet member={selected} onClose={() => setSelected(null)} />
@@ -132,7 +152,7 @@ function RolePicker({
         >
           <span className="min-w-0 flex-1">
             <span className="block font-medium">{ROLE_LABELS[r].name}</span>
-            <span className="block text-sm text-muted">{ROLE_LABELS[r].description}</span>
+            <span className="block text-label text-muted">{ROLE_LABELS[r].description}</span>
           </span>
           {value === r && <Check className="size-4 shrink-0 text-ink" />}
         </button>
@@ -172,11 +192,11 @@ function InviteSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
     return (
       <Sheet open={open} onClose={close} title="Invite link ready">
         <div className="space-y-4">
-          <p className="text-sm text-muted">
+          <p className="text-label text-muted">
             Send this link to the person you're inviting. It works once and expires in 7 days
             {create.data.phone ? `, only for ${create.data.phone}` : ''}.
           </p>
-          <div className="rounded-lg border border-line bg-subtle/60 p-3 font-mono text-[13px] break-all">{link}</div>
+          <div className="rounded-lg border border-line bg-subtle/60 p-3 font-mono text-label break-all">{link}</div>
           {'share' in navigator && (
             <Button className="w-full" onClick={() => navigator.share({ title: `Join ${book.name}`, text: message }).catch(() => undefined)}>
               <Share2 className="size-4" /> Share via WhatsApp, SMS…
@@ -309,7 +329,7 @@ function PendingInvites() {
       <Card className="divide-y divide-line overflow-hidden">
         {invites.data.map((i) => (
           <div key={i.id} className="flex min-h-14 items-center gap-3 px-4 py-2">
-            <span className="min-w-0 flex-1 text-sm">
+            <span className="min-w-0 flex-1 text-label">
               <span className="block font-medium">{i.phone ?? 'Anyone with the link'}</span>
               <span className="text-muted">
                 by {i.createdByName} · expires {new Date(i.expiresAt).toLocaleDateString()}
@@ -339,29 +359,35 @@ function ActivityFeed() {
     refetchInterval: 60_000,
   });
   const rows = activity.data ?? [];
-  if (!rows.length) return null;
+  if (activity.isLoading) {
+    return (
+      <div className="grid h-24 place-items-center text-muted">
+        <Spinner />
+      </div>
+    );
+  }
+  if (!rows.length) return <p className="py-6 text-center text-label text-muted">No activity yet.</p>;
   const visible = expanded ? rows : rows.slice(0, 5);
 
   return (
-    <section>
-      <SectionTitle>Activity</SectionTitle>
+    <>
       <Card className="divide-y divide-line overflow-hidden">
         {visible.map((a) => (
-          <div key={a.id} className="flex gap-3 px-4 py-3 text-sm">
+          <div key={a.id} className="flex gap-3 px-4 py-3 text-label">
             <History className="mt-0.5 size-4 shrink-0 text-muted" />
             <p className="min-w-0 flex-1">
               <strong>{a.userName}</strong> {a.summary}
             </p>
-            <span className="shrink-0 text-xs text-muted">{relativeTime(a.at)}</span>
+            <span className="shrink-0 text-caption text-muted">{relativeTime(a.at)}</span>
           </div>
         ))}
         {rows.length > 5 && (
-          <button onClick={() => setExpanded(!expanded)} className="min-h-11 w-full text-sm font-medium text-accent">
+          <button onClick={() => setExpanded(!expanded)} className="min-h-11 w-full text-label font-medium text-accent">
             {expanded ? 'Show less' : `Show all ${rows.length}`}
           </button>
         )}
       </Card>
-    </section>
+    </>
   );
 }
 
@@ -377,10 +403,8 @@ function ExportBook() {
   });
 
   return (
-    <section>
-      <SectionTitle>Export</SectionTitle>
-      <Card className="space-y-3 p-4">
-        <p className="text-sm text-muted">
+      <div className="space-y-3">
+        <p className="text-label text-muted">
           Download this book's transactions. Deleted items and phone numbers are not included.
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
@@ -392,12 +416,11 @@ function ExportBook() {
           </Button>
         </div>
         <ErrorBanner error={exporter.error} />
-      </Card>
-    </section>
+      </div>
   );
 }
 
-function BookSettings() {
+function BookSettings({ onDone }: { onDone: () => void }) {
   const { book, can } = useCurrentBook();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -408,7 +431,10 @@ function BookSettings() {
     setForm({ name: book.name, currency: book.currency });
   }
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['books'] });
+  const refresh = () => {
+    onDone();
+    return queryClient.invalidateQueries({ queryKey: ['books'] });
+  };
   const save = useMutation({ mutationFn: () => api.patch(`/books/${book.id}`, form), onSuccess: refresh });
   const leave = useMutation({ mutationFn: () => api.post(`/books/${book.id}/leave`), onSuccess: refresh });
   const remove = useMutation({ mutationFn: () => api.del(`/books/${book.id}`), onSuccess: refresh });
@@ -417,12 +443,8 @@ function BookSettings() {
   const canLeave = book.role !== 'owner';
   const canDelete = can('book.delete') && !book.isPersonal;
 
-  if (!can('book.settings') && !canLeave && !canDelete) return null;
-
   return (
-    <section>
-      <SectionTitle>Book</SectionTitle>
-      <Card className="space-y-4 p-4">
+      <div className="space-y-4">
         {can('book.settings') && (
           <form
             className="space-y-3"
@@ -476,7 +498,6 @@ function BookSettings() {
             <Trash2 className="size-4" /> Delete book
           </Button>
         )}
-      </Card>
-    </section>
+      </div>
   );
 }

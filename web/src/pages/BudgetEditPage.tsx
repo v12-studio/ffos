@@ -7,7 +7,7 @@ import { PageTitle } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { Button, Card, ErrorBanner, inputClass, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
+import { Button, Card, ErrorBanner, inputClass, PageSkeleton, SectionTitle, Sheet } from '../components/ui.tsx';
 import { api, ApiError } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { useBudget } from '../lib/budget.ts';
@@ -27,9 +27,7 @@ export function BudgetEditPage() {
   if (!can('budget.manage')) return <Navigate to="/budget" replace />;
   if (!budget.data || !categories.data) {
     return (
-      <div className="grid h-60 place-items-center text-muted">
-        <Spinner />
-      </div>
+      <PageSkeleton />
     );
   }
   // Keyed by version so a reload after a conflict starts from the latest plan.
@@ -78,8 +76,8 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
   };
 
   return (
-    <div className="space-y-6 pb-24">
-      <Link to={month === currentMonth() ? '/budget' : `/budget?month=${month}`} className="-ml-1 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1 text-sm font-medium text-muted hover:text-ink">
+    <div className="space-y-6">
+      <Link to={month === currentMonth() ? '/budget' : `/budget?month=${month}`} className="-ml-1 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1 text-label font-medium text-muted hover:text-ink">
         <ArrowLeft className="size-4" /> Budget
       </Link>
       <PageTitle subtitle="Split the month's income into budget heads. Anything left over is saved.">Plan {monthLabel(month)}</PageTitle>
@@ -87,7 +85,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
       <section>
         <SectionTitle>Income</SectionTitle>
         <Card className="p-4">
-          <label htmlFor="income" className="mb-1.5 block text-sm font-medium">
+          <label htmlFor="income" className="mb-1.5 block text-label font-medium">
             Expected income this month
           </label>
           <AmountInput id="income" symbol={symbol} value={income} onChange={setIncome} invalid={incomeMinor === null} large />
@@ -97,16 +95,15 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
       <section>
         <SectionTitle>Budget heads</SectionTitle>
         <Card className="divide-y divide-line">
-          {rows.length === 0 && <p className="px-4 py-5 text-center text-sm text-muted">Add heads like Food, Bills or Medical and give each a limit.</p>}
+          {rows.length === 0 && <p className="px-4 py-5 text-center text-label text-muted">Add heads like Food, Bills or Medical and give each a limit.</p>}
           {rows.map((row, i) => {
             const cat = byId.get(row.categoryId);
             return (
               <div key={row.categoryId} className="flex items-center gap-3 px-4 py-2.5">
-                <CategoryTile category={cat} size="sm" />
-                <label htmlFor={`head-${row.categoryId}`} className="min-w-0 flex-1 truncate text-[15px] font-medium">
+                <label htmlFor={`head-${row.categoryId}`} className="min-w-0 flex-1 truncate text-body font-medium">
                   {cat?.name ?? 'Unknown'}
                 </label>
-                <div className="w-36 shrink-0">
+                <div className="w-28 shrink-0">
                   <AmountInput
                     id={`head-${row.categoryId}`}
                     symbol={symbol}
@@ -126,14 +123,14 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
               </div>
             );
           })}
-          <button onClick={() => setAdding(true)} className="flex min-h-12 w-full items-center justify-center gap-2 text-sm font-medium text-accent hover:bg-subtle/60">
+          <button onClick={() => setAdding(true)} className="flex min-h-12 w-full items-center justify-center gap-2 text-label font-medium text-accent hover:bg-subtle/60">
             <Plus className="size-4" /> Add budget head
           </button>
         </Card>
       </section>
 
       {/* Running total stays visible while typing amounts. */}
-      <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-30 border-t border-line bg-surface/95 backdrop-blur-md lg:bottom-0 lg:left-60">
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface pb-safe lg:left-60">
         <div className="mx-auto max-w-2xl space-y-2 px-4 py-3 lg:max-w-3xl lg:px-8">
           <ErrorBanner error={save.error} />
           {conflict && (
@@ -142,7 +139,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
             </Button>
           )}
           <div className="flex items-center gap-3">
-            <div className="min-w-0 flex-1 text-[13px] leading-snug">
+            <div className="min-w-0 flex-1 text-label leading-snug">
               <p className="text-muted tabular">
                 Budgeted {money(allocated)} of {money(incomeMinor ?? 0)}
               </p>
@@ -181,7 +178,7 @@ function AmountInput({
 }) {
   return (
     <div className="relative">
-      <span className={`pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted ${large ? 'text-lg' : ''}`}>{symbol}</span>
+      <span className={`pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted ${large ? 'text-title' : ''}`}>{symbol}</span>
       <input
         id={id}
         inputMode="decimal"
@@ -191,7 +188,7 @@ function AmountInput({
         value={value}
         aria-invalid={invalid}
         onChange={(e) => onChange(e.target.value.replace(/[^\d.,]/g, ''))}
-        className={`${inputClass} pl-8 text-right tabular ${large ? 'min-h-12 text-xl font-semibold' : ''}`}
+        className={`${inputClass} pl-8 text-right tabular ${large ? 'min-h-12 text-title font-semibold' : ''}`}
       />
     </div>
   );
@@ -244,7 +241,7 @@ function AddHeadSheet({
           if (name.trim()) create.mutate();
         }}
       >
-        <label htmlFor="new-head" className="block text-sm font-medium">
+        <label htmlFor="new-head" className="block text-label font-medium">
           New head
         </label>
         <div className="flex gap-2">
@@ -266,13 +263,13 @@ function AddHeadSheet({
 
       {available.length > 0 && (
         <>
-          <p className="mb-2 text-sm font-medium">Or pick an existing category</p>
+          <p className="mb-2 text-label font-medium">Or pick an existing category</p>
           <div className="flex flex-wrap gap-2">
             {available.map((c) => (
               <button
                 key={c.id}
                 onClick={() => onPick(c.id)}
-                className="flex min-h-9 items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-sm hover:bg-subtle"
+                className="flex min-h-9 items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-label hover:bg-subtle"
               >
                 <CategoryTile category={c} size="sm" />
                 {c.name}

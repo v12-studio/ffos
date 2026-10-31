@@ -8,7 +8,7 @@ import { CategoryTile } from '../components/CategoryIcon.tsx';
 import { RecurringDueCard } from '../components/RecurringDue.tsx';
 import { TrendsCard } from '../components/TrendsCard.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { Button, Card, EmptyState, ErrorBanner, SectionTitle, Spinner } from '../components/ui.tsx';
+import { Button, Card, EmptyState, ErrorBanner, PageSkeleton, ProgressBar, SectionTitle, StatRow } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { lineStatus, statusBar, useBudget, usedPct } from '../lib/budget.ts';
@@ -35,14 +35,11 @@ export function HomePage() {
       {month === currentMonth() && <RecurringDueCard month={month} />}
 
       {!s ? (
-        <div className="grid h-40 place-items-center text-muted">
-          <Spinner />
-        </div>
+        <PageSkeleton />
       ) : (
         <>
           <SummaryCard income={s.income} expense={s.expense} net={s.net} money={money} />
           <BudgetSnapshot month={month} />
-          <TrendsCard month={month} onSelect={setMonth} />
 
           {s.count === 0 ? (
             <Card>
@@ -57,7 +54,7 @@ export function HomePage() {
               </EmptyState>
             </Card>
           ) : (
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               {s.byCategory.length > 0 && (
                 <section>
                   <SectionTitle>Spending by category</SectionTitle>
@@ -71,9 +68,9 @@ export function HomePage() {
                           to={`/transactions?category=${row.categoryId}${month === currentMonth() ? '' : `&month=${month}`}`}
                           className="flex items-center gap-3 px-4 py-3 hover:bg-subtle/60"
                         >
-                          <CategoryTile category={cat} size="sm" />
+                          <CategoryTile category={cat} />
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-baseline justify-between gap-2 text-sm">
+                            <div className="flex items-baseline justify-between gap-2 text-label">
                               <span className="truncate font-medium">{cat?.name ?? 'Unknown'}</span>
                               <span className="shrink-0 tabular">
                                 {money(row.total)}
@@ -95,7 +92,7 @@ export function HomePage() {
               <section>
                 <SectionTitle
                   action={
-                    <Link to="/transactions" className="text-[13px] font-medium text-accent">
+                    <Link to="/transactions" className="text-label font-medium text-accent">
                       View all
                     </Link>
                   }
@@ -110,6 +107,8 @@ export function HomePage() {
               </section>
             </div>
           )}
+
+          <TrendsCard month={month} onSelect={setMonth} />
         </>
       )}
     </div>
@@ -118,38 +117,43 @@ export function HomePage() {
 
 function SummaryCard({ income, expense, net, money }: { income: number; expense: number; net: number; money: (n: number) => string }) {
   const total = income + expense;
-  const incomePct = total ? (income / total) * 100 : 50;
   return (
     <Card className="p-5">
-      <p className="text-[13px] font-medium text-muted">Net cash flow</p>
-      <p className={`mt-1 text-[32px] leading-tight font-semibold tracking-tight tabular ${net < 0 ? 'text-negative' : ''}`}>
+      <p className="text-label font-medium text-muted">Net cash flow</p>
+      <p className={`mt-1 text-display font-semibold tracking-tight tabular ${net < 0 ? 'text-negative' : ''}`}>
         {net < 0 ? '−' : ''}
         {money(Math.abs(net))}
       </p>
 
-      <div className="mt-5 flex h-1.5 gap-0.5 overflow-hidden rounded-full bg-subtle" aria-hidden>
-        {total > 0 && (
-          <>
-            <div className="bg-positive" style={{ width: `${incomePct}%` }} />
-            <div className="flex-1 bg-negative/80" />
-          </>
-        )}
-      </div>
+      {/* The split only says something once there's both income and spending to compare. */}
+      {income > 0 && expense > 0 && (
+        <div className="mt-5 flex h-1.5 gap-0.5 overflow-hidden rounded-full bg-subtle" aria-hidden>
+          <div className="bg-positive" style={{ width: `${(income / total) * 100}%` }} />
+          <div className="flex-1 bg-negative/80" />
+        </div>
+      )}
 
-      <dl className="mt-4 grid grid-cols-2 gap-4">
-        <div>
-          <dt className="flex items-center gap-1.5 text-[13px] text-muted">
-            <span className="size-2 rounded-full bg-positive" /> Income
-          </dt>
-          <dd className="mt-0.5 text-lg font-semibold tabular">{money(income)}</dd>
-        </div>
-        <div>
-          <dt className="flex items-center gap-1.5 text-[13px] text-muted">
-            <span className="size-2 rounded-full bg-negative/80" /> Expenses
-          </dt>
-          <dd className="mt-0.5 text-lg font-semibold tabular">{money(expense)}</dd>
-        </div>
-      </dl>
+      <StatRow
+        className="mt-4"
+        items={[
+          {
+            label: (
+              <>
+                <span className="size-2 rounded-full bg-positive" /> Income
+              </>
+            ),
+            value: <span className="text-title">{money(income)}</span>,
+          },
+          {
+            label: (
+              <>
+                <span className="size-2 rounded-full bg-negative/80" /> Expenses
+              </>
+            ),
+            value: <span className="text-title">{money(expense)}</span>,
+          },
+        ]}
+      />
     </Card>
   );
 }
@@ -171,8 +175,8 @@ function BudgetSnapshot({ month }: { month: string }) {
         <Card className="flex items-center gap-3 p-4 hover:bg-subtle/60">
           <PiggyBank className="size-5 shrink-0 text-muted" strokeWidth={1.75} />
           <span className="min-w-0 flex-1">
-            <span className="block text-[15px] font-medium">Plan {monthLabel(month).split(' ')[0]}'s budget</span>
-            <span className="block text-[13px] text-muted">Split your income into heads and see what you save.</span>
+            <span className="block text-body font-medium">Plan {monthLabel(month).split(' ')[0]}'s budget</span>
+            <span className="block text-label text-muted">Split your income into heads and see what you save.</span>
           </span>
           <ChevronRight className="size-4 shrink-0 text-muted" />
         </Card>
@@ -186,33 +190,34 @@ function BudgetSnapshot({ month }: { month: string }) {
     .sort((x, y) => usedPct(y) - usedPct(x) || y.spent - x.spent)
     .slice(0, 3);
   const savings = b.totals.projectedSavings;
+  const nothingSpent = b.lines.every((l) => l.spent === 0);
 
   return (
     <Link to={href} className="block">
       <Card className="p-4 hover:bg-subtle/40">
         <div className="flex items-center justify-between gap-2">
-          <p className="text-[13px] font-medium text-muted">Budget · {monthLabel(month).split(' ')[0]}</p>
+          <p className="text-label font-medium text-muted">Budget · {monthLabel(month).split(' ')[0]}</p>
           <ChevronRight className="size-4 text-muted" />
         </div>
-        <p className="mt-1 text-sm">
+        <p className="mt-1 text-label">
           {savings >= 0 ? 'On track to save ' : 'Heading for a shortfall of '}
           <strong className={`font-semibold tabular ${savings < 0 ? 'text-negative' : 'text-positive'}`}>{money(Math.abs(savings))}</strong>
         </p>
-        {watch.length > 0 && (
+        {nothingSpent ? (
+          <p className="mt-1 text-label text-muted tabular">Nothing spent yet · {money(b.totals.allocated)} budgeted</p>
+        ) : (
           <div className="mt-3 space-y-2.5">
             {watch.map((l) => {
               const status = lineStatus(l);
               return (
                 <div key={l.categoryId}>
-                  <div className="flex justify-between gap-2 text-[13px]">
+                  <div className="flex justify-between gap-2 text-label">
                     <span className="truncate">{byId.get(l.categoryId)?.name ?? 'Unknown'}</span>
                     <span className={`shrink-0 tabular ${status === 'over' ? 'text-negative' : 'text-muted'}`}>
                       {l.remaining < 0 ? `${money(-l.remaining)} over` : `${money(l.remaining)} left`}
                     </span>
                   </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-subtle">
-                    <div className={`h-full rounded-full ${statusBar[status]}`} style={{ width: `${usedPct(l)}%` }} />
-                  </div>
+                  <ProgressBar className="mt-1 h-1.5" pct={usedPct(l)} tone={statusBar[status]} />
                 </div>
               );
             })}

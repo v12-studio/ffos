@@ -16,7 +16,7 @@ import {
   type LockConfig,
 } from '../lib/applock.ts';
 import { Logo } from './auth-ui.tsx';
-import { Button, Card, ErrorBanner, Field, SectionTitle, Sheet } from './ui.tsx';
+import { Button, Card, ErrorBanner, Field, Sheet } from './ui.tsx';
 
 interface AppLockState {
   config: LockConfig | null;
@@ -175,15 +175,15 @@ function LockScreen({
     <div className="flex min-h-dvh flex-col items-center justify-between px-6 pt-safe pb-safe">
       <div className="flex flex-col items-center pt-16 text-center">
         <Logo className="mb-5 size-10" />
-        <h1 className="text-xl font-semibold tracking-tight">Welcome back, {user!.name.split(' ')[0]}</h1>
-        <p className="mt-1 text-sm text-muted">{blockedFor ? `Too many attempts. Try again in ${blockedFor}s.` : 'Enter your PIN to unlock'}</p>
+        <h1 className="text-title font-semibold tracking-tight">Welcome back, {user!.name.split(' ')[0]}</h1>
+        <p className="mt-1 text-label text-muted">{blockedFor ? `Too many attempts. Try again in ${blockedFor}s.` : 'Enter your PIN to unlock'}</p>
 
         <div className={`mt-8 flex gap-3.5 ${shake ? 'animate-[shake_0.4s]' : ''}`} aria-label={`${pin.length} of ${config.pinLength} digits entered`}>
           {Array.from({ length: config.pinLength }, (_, i) => (
             <span key={i} className={`size-3.5 rounded-full border-2 transition-colors ${i < pin.length ? 'border-ink bg-ink' : 'border-line'}`} />
           ))}
         </div>
-        <p role="alert" className="mt-4 min-h-10 max-w-64 text-sm text-negative">
+        <p role="alert" className="mt-4 min-h-10 max-w-64 text-label text-negative">
           {error}
         </p>
       </div>
@@ -213,7 +213,7 @@ function LockScreen({
             );
           })}
         </div>
-        <button onClick={() => signOut()} className="mt-6 mb-6 w-full text-center text-sm font-medium text-accent">
+        <button onClick={() => signOut()} className="mt-6 mb-6 w-full text-center text-label font-medium text-accent">
           Forgot PIN? Sign out
         </button>
       </div>
@@ -252,15 +252,14 @@ export function AppLockSettings() {
   };
 
   return (
-    <section>
-      <SectionTitle>App lock</SectionTitle>
+    <>
       <Card className="divide-y divide-line">
         {!config ? (
           <div className="flex items-start gap-3 p-4">
             <LockKeyhole className="mt-0.5 size-5 shrink-0 text-muted" strokeWidth={1.75} />
             <div className="min-w-0 flex-1">
-              <p className="text-[15px] font-medium">Protect this device</p>
-              <p className="mt-0.5 text-sm text-muted">
+              <p className="text-body font-medium">Protect this device</p>
+              <p className="mt-0.5 text-label text-muted">
                 Ask for a PIN{bioAvailable ? ` or ${biometricLabel()}` : ''} when FFOS opens. Set separately on each device.
               </p>
               <Button className="mt-3" onClick={() => setMode('create')}>
@@ -271,7 +270,7 @@ export function AppLockSettings() {
         ) : (
           <>
             <Row label="PIN" hint={`${config.pinLength} digits · on this device only`}>
-              <Button variant="secondary" className="min-h-9! px-3 text-sm" onClick={() => setMode('change')}>
+              <Button variant="secondary" className="min-h-9! px-3 text-label" onClick={() => setMode('change')}>
                 Change
               </Button>
             </Row>
@@ -289,7 +288,7 @@ export function AppLockSettings() {
               <select
                 value={config.timeoutMin}
                 onChange={(e) => setConfig({ ...config, timeoutMin: Number(e.target.value) })}
-                className="min-h-9 rounded-lg border border-line bg-surface px-2 text-sm"
+                className="min-h-9 rounded-lg border border-line bg-surface px-2"
                 aria-label="Lock when away"
               >
                 {LOCK_TIMEOUTS.map((t) => (
@@ -311,7 +310,7 @@ export function AppLockSettings() {
         )}
       </Card>
       <PinSheet mode={mode} onClose={() => setMode(null)} />
-    </section>
+    </>
   );
 }
 
@@ -319,8 +318,8 @@ function Row({ label, hint, children }: { label: string; hint?: string; children
   return (
     <div className="flex min-h-14 items-center gap-3 px-4 py-2.5">
       <div className="min-w-0 flex-1">
-        <p className="text-[15px] font-medium">{label}</p>
-        {hint && <p className="text-[13px] text-muted">{hint}</p>}
+        <p className="text-body font-medium">{label}</p>
+        {hint && <p className="text-label text-muted">{hint}</p>}
       </div>
       {children}
     </div>
@@ -397,7 +396,7 @@ function PinSheet({ mode, onClose }: { mode: SheetMode; onClose: () => void }) {
           void submit();
         }}
       >
-        {mode === 'create' && <p className="text-sm text-muted">Choose a 4–6 digit PIN. It stays on this device and is never sent to the server.</p>}
+        {mode === 'create' && <p className="text-label text-muted">Choose a 4–6 digit PIN. It stays on this device and is never sent to the server.</p>}
         {needsCurrent && (
           <Field label="Current PIN" {...pinProps} value={current} error={errors.current} onChange={(e) => setCurrent(digitsOnly(e.target.value))} autoFocus />
         )}

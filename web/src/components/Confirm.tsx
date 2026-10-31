@@ -73,11 +73,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 </span>
               )}
               <div className="min-w-0">
-                <h2 id="confirm-title" className="text-base font-semibold">
+                <h2 id="confirm-title" className="text-body font-semibold">
                   {state.title}
                 </h2>
                 {state.message && (
-                  <div id="confirm-message" className="mt-1 text-sm text-muted">
+                  <div id="confirm-message" className="mt-1 text-label text-muted">
                     {state.message}
                   </div>
                 )}

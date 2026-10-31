@@ -6,7 +6,7 @@ import { Amount, PageTitle } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { Button, Card, EmptyState, ErrorBanner, Spinner } from '../components/ui.tsx';
+import { Button, Card, EmptyState, ErrorBanner, PageSkeleton } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { dayLabel, relativeTime } from '../lib/format.ts';
@@ -37,8 +37,8 @@ export function DeletedPage() {
 
   return (
     <div className="space-y-5">
-      <Link to="/transactions" className="-ml-1 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1 text-sm font-medium text-muted hover:text-ink">
-        <ArrowLeft className="size-4" /> Transactions
+      <Link to="/more" className="-ml-1 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1 text-label font-medium text-muted hover:text-ink">
+        <ArrowLeft className="size-4" /> Settings
       </Link>
       <PageTitle
         subtitle={`Deleted transactions are removed permanently after ${DELETED_RETENTION_DAYS} days.${
@@ -50,9 +50,7 @@ export function DeletedPage() {
 
       <ErrorBanner error={deleted.error} />
       {deleted.isLoading ? (
-        <div className="grid h-40 place-items-center text-muted">
-          <Spinner />
-        </div>
+        <PageSkeleton />
       ) : !deleted.data?.length ? (
         <Card>
           <EmptyState icon={<Trash2 className="size-5" />} title="Nothing here">
@@ -68,19 +66,19 @@ export function DeletedPage() {
               <div key={t.id} className="flex items-start gap-3 px-4 py-3">
                 <CategoryTile category={category} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[15px] font-medium">{t.note || category?.name || 'Transaction'}</p>
-                  <p className="text-[13px] text-muted">
+                  <p className="truncate text-body font-medium">{t.note || category?.name || 'Transaction'}</p>
+                  <p className="text-label text-muted">
                     {dayLabel(t.date)} · deleted by {t.deletedByName} {relativeTime(t.deletedAt)}
                   </p>
-                  <p className={`mt-0.5 text-xs ${left <= 3 ? 'text-negative' : 'text-muted'}`}>
+                  <p className={`mt-0.5 text-caption ${left <= 3 ? 'text-negative' : 'text-muted'}`}>
                     {left === 0 ? 'Removed today' : `${left} day${left === 1 ? '' : 's'} left`}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-2">
-                  <Amount txn={t} currency={book.currency} className="text-[15px]" />
+                  <Amount txn={t} currency={book.currency} className="text-body" />
                   <Button
                     variant="secondary"
-                    className="min-h-8! px-2.5 text-[13px]"
+                    className="min-h-8! px-2.5 text-label"
                   loading={restore.isPending && restore.variables === t.id}
                   disabled={restore.isPending}
                   onClick={() => restore.mutate(t.id)}

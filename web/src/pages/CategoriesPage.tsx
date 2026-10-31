@@ -6,7 +6,7 @@ import { PageTitle } from '../components/AppShell.tsx';
 import { CATEGORY_COLORS, CategoryTile, ICON_KEYS, iconFor } from '../components/CategoryIcon.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { useToast } from '../components/Toast.tsx';
-import { Button, Card, EmptyState, ErrorBanner, Field, fieldErrors, SectionTitle, Segmented, Sheet, Spinner } from '../components/ui.tsx';
+import { Button, Card, EmptyState, ErrorBanner, Field, fieldErrors, PageSkeleton, SectionTitle, Segmented, Sheet } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 
@@ -74,16 +74,14 @@ export function CategoriesPage() {
       <ErrorBanner error={categories.error ?? reorder.error ?? unhide.error} />
 
       {categories.isLoading ? (
-        <div className="grid h-40 place-items-center text-muted">
-          <Spinner />
-        </div>
+        <PageSkeleton />
       ) : (
         <>
           <section>
             <SectionTitle
               action={
                 canManage && (
-                  <button onClick={() => setEditing('new')} className="flex items-center gap-1 text-[13px] font-medium text-accent">
+                  <button onClick={() => setEditing('new')} className="flex items-center gap-1 text-label font-medium text-accent">
                     <Plus className="size-3.5" /> Add
                   </button>
                 )
@@ -104,8 +102,8 @@ export function CategoriesPage() {
                       disabled={!canManage}
                       className="flex min-h-14 min-w-0 flex-1 items-center gap-3 px-4 text-left hover:bg-subtle/60 disabled:hover:bg-transparent"
                     >
-                      <CategoryTile category={c} size="sm" />
-                      <span className="min-w-0 flex-1 truncate text-[15px] font-medium">{c.name}</span>
+                      <CategoryTile category={c} />
+                      <span className="min-w-0 flex-1 truncate text-body font-medium">{c.name}</span>
                     </button>
                     {canManage && (
                       <>
@@ -125,7 +123,7 @@ export function CategoriesPage() {
                 ))}
               </Card>
             )}
-            <p className="mt-2 px-0.5 text-[13px] text-muted">This is the order they appear in when adding an entry.</p>
+            <p className="mt-2 px-0.5 text-label text-muted">This is the order they appear in when adding an entry.</p>
           </section>
 
           {hidden.length > 0 && (
@@ -134,12 +132,12 @@ export function CategoriesPage() {
               <Card className="divide-y divide-line overflow-hidden">
                 {hidden.map((c) => (
                   <div key={c.id} className="flex min-h-14 items-center gap-3 px-4 py-2">
-                    <CategoryTile category={c} size="sm" />
-                    <span className="min-w-0 flex-1 truncate text-[15px] text-muted">{c.name}</span>
+                    <CategoryTile category={c} />
+                    <span className="min-w-0 flex-1 truncate text-body text-muted">{c.name}</span>
                     {canManage && (
                       <Button
                         variant="secondary"
-                        className="min-h-9! px-3 text-sm"
+                        className="min-h-9! px-3 text-label"
                         loading={unhide.isPending && unhide.variables?.id === c.id}
                         onClick={() => unhide.mutate(c)}
                       >
@@ -149,7 +147,7 @@ export function CategoriesPage() {
                   </div>
                 ))}
               </Card>
-              <p className="mt-2 px-0.5 text-[13px] text-muted">Past entries keep these categories; they just aren't offered for new ones.</p>
+              <p className="mt-2 px-0.5 text-label text-muted">Past entries keep these categories; they just aren't offered for new ones.</p>
             </section>
           )}
         </>
@@ -234,7 +232,7 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
         </div>
 
         <fieldset>
-          <legend className="mb-2 text-sm font-medium">Icon</legend>
+          <legend className="mb-2 text-label font-medium">Icon</legend>
           <div className="grid grid-cols-8 gap-1.5">
             {ICON_KEYS.map((key) => {
               const Icon = iconFor(key);
@@ -256,7 +254,7 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
         </fieldset>
 
         <fieldset>
-          <legend className="mb-2 text-sm font-medium">Colour</legend>
+          <legend className="mb-2 text-label font-medium">Colour</legend>
           <div className="grid grid-cols-7 gap-2">
             {CATEGORY_COLORS.map((color) => (
               <button

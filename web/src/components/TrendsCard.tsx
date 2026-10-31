@@ -4,7 +4,7 @@ import { formatMoney, type TrendsDTO } from '@ffos/shared';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { monthLabel } from '../lib/format.ts';
-import { Card } from './ui.tsx';
+import { Card, StatRow } from './ui.tsx';
 
 const MONTHS = 6;
 
@@ -21,7 +21,8 @@ export function TrendsCard({ month, onSelect }: { month: string; onSelect: (mont
     placeholderData: (prev) => prev,
   });
   const data = trends.data?.months;
-  if (!data || data.every((m) => !m.income && !m.expense)) return null;
+  // One month of data has nothing to compare against.
+  if (!data || data.filter((m) => m.income || m.expense).length < 2) return null;
 
   const money = (n: number) => formatMoney(n, book.currency);
   const max = Math.max(...data.map((m) => Math.max(m.income, m.expense)), 1);
@@ -34,8 +35,8 @@ export function TrendsCard({ month, onSelect }: { month: string; onSelect: (mont
   return (
     <Card className="p-4">
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-[13px] font-medium text-muted">Last {MONTHS} months</p>
-        <div className="flex gap-3 text-xs text-muted" aria-hidden>
+        <p className="text-label font-medium text-muted">Last {MONTHS} months</p>
+        <div className="flex gap-3 text-caption text-muted" aria-hidden>
           <span className="flex items-center gap-1.5">
             <span className="size-2 rounded-full bg-chart-income" /> Income
           </span>
@@ -46,16 +47,24 @@ export function TrendsCard({ month, onSelect }: { month: string; onSelect: (mont
       </div>
 
       {/* Readout for the hovered (or selected) month. */}
-      <div className="mt-2 min-h-11" aria-live="polite">
-        <p className="text-sm font-semibold">{monthLabel(focus.month)}</p>
-        <p className="text-[13px] text-muted tabular">
-          Income {money(focus.income)} · Expenses {money(focus.expense)} ·{' '}
-          <span className={`whitespace-nowrap ${net < 0 ? 'text-negative' : 'text-ink'}`}>
-            {'Net '}
-            {net < 0 ? '−' : '+'}
-            {money(Math.abs(net))}
-          </span>
-        </p>
+      <div className="mt-2" aria-live="polite">
+        <p className="text-label font-semibold">{monthLabel(focus.month)}</p>
+        <StatRow
+          className="mt-1.5 text-label"
+          items={[
+            { label: 'Income', value: money(focus.income) },
+            { label: 'Expenses', value: money(focus.expense) },
+            {
+              label: 'Net',
+              value: (
+                <span className={net < 0 ? 'text-negative' : ''}>
+                  {net < 0 ? '−' : '+'}
+                  {money(Math.abs(net))}
+                </span>
+              ),
+            },
+          ]}
+        />
       </div>
 
       <div className="mt-3 flex h-32 items-stretch gap-1 border-b border-line" onMouseLeave={() => setHovered(null)}>
@@ -82,14 +91,14 @@ export function TrendsCard({ month, onSelect }: { month: string; onSelect: (mont
       </div>
       <div className="mt-1.5 flex gap-1" aria-hidden>
         {data.map((m) => (
-          <span key={m.month} className={`flex-1 text-center text-[11px] ${m.month === month ? 'font-semibold text-ink' : 'text-muted'}`}>
+          <span key={m.month} className={`flex-1 text-center text-micro ${m.month === month ? 'font-semibold text-ink' : 'text-muted'}`}>
             {monthLabel(m.month).slice(0, 3)}
           </span>
         ))}
       </div>
 
       {avgSpend > 0 && (
-        <p className="mt-3 text-[13px] text-muted tabular">
+        <p className="mt-3 text-label text-muted tabular">
           Average spending {money(avgSpend)} a month
           {focus.expense > 0 && focus.month === month && (
             <>
