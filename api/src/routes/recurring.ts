@@ -8,6 +8,7 @@ import {
   recurringAddSchema,
   recurringCreateSchema,
   recurringDate,
+  recurringPaySchema,
   recurringSkipSchema,
   recurringUpdateSchema,
   todayInAppZone,
@@ -70,6 +71,47 @@ async function dueIn(db: Collections, book: BookDoc, month: string) {
     .map((rule) => ({ rule, date: recurringDate(month, rule.dayOfMonth) }))
     .filter(({ rule, date }) => !addedIds.has(rule._id.toHexString()) && live.has(rule.categoryId.toHexString()) && date <= today)
     .sort((a, b) => a.date.localeCompare(b.date) || b.rule.amount - a.rule.amount);
+}
+
+/**
+ * Adds one month's entry from a rule. Each rule lands at most once per month, even if two members
+ * press "Add" at the same time. Returns 1 if an entry was added, 0 if it was already there.
+ */
+async function addFromRule(db: Collections, bookId: ObjectId, rule: RecurringDoc, month: string, date: string, userId: ObjectId) {
+  const now = new Date();
+  const doc: TransactionDoc = {
+    _id: new ObjectId(),
+    bookId,
+    type: rule.type,
+    amount: rule.amount,
+    date,
+    categoryId: rule.categoryId,
+    note: rule.note,
+    createdBy: userId,
+    updatedBy: userId,
+    version: 0,
+    createdAt: now,
+    updatedAt: now,
+    recurringId: rule._id,
+    clientId: `rec-${rule._id.toHexString()}-${month}`,
+  };
+  try {
+    await db.transactions.insertOne(doc);
+    return 1;
+  } catch (err) {
+    // A deleted earlier copy still holds the id: bring it back with today's details.
+    if (!isDuplicateKey(err)) throw err;
+    const { type, amount, categoryId, note } = doc;
+    const restored = await db.transactions.updateOne(
+      { bookId, clientId: doc.clientId, deletedAt: { $exists: true } },
+      {
+        $unset: { deletedAt: '', purgeAt: '' },
+        $set: { type, amount, date, categoryId, note, updatedBy: userId, updatedAt: now },
+        $inc: { version: 1 },
+      },
+    );
+    return restored.modifiedCount;
+  }
 }
 
 async function findRule(db: Collections, bookId: ObjectId, id: string) {
@@ -196,43 +238,8 @@ export const recurringRoutes = new Hono<AppEnv>()
     const db = c.get('db');
     const book = c.get('book');
     const due = (await dueIn(db, book, month)).filter((d) => ids.includes(d.rule._id.toHexString()));
-    const now = new Date();
     let added = 0;
-    for (const { rule, date } of due) {
-      const doc: TransactionDoc = {
-        _id: new ObjectId(),
-        bookId: book._id,
-        type: rule.type,
-        amount: rule.amount,
-        date,
-        categoryId: rule.categoryId,
-        note: rule.note,
-        createdBy: c.get('userId'),
-        updatedBy: c.get('userId'),
-        version: 0,
-        createdAt: now,
-        updatedAt: now,
-        recurringId: rule._id,
-        clientId: `rec-${rule._id.toHexString()}-${month}`,
-      };
-      try {
-        await db.transactions.insertOne(doc);
-        added++;
-      } catch (err) {
-        // A deleted earlier copy still holds the id: bring it back with today's details.
-        if (!isDuplicateKey(err)) throw err;
-        const { type, amount, categoryId, note } = doc;
-        const restored = await db.transactions.updateOne(
-          { bookId: book._id, clientId: doc.clientId, deletedAt: { $exists: true } },
-          {
-            $unset: { deletedAt: '', purgeAt: '' },
-            $set: { type, amount, date, categoryId, note, updatedBy: c.get('userId'), updatedAt: now },
-            $inc: { version: 1 },
-          },
-        );
-        added += restored.modifiedCount;
-      }
-    }
+    for (const { rule, date } of due) added += await addFromRule(db, book._id, rule, month, date, c.get('userId'));
     if (added) {
       await logActivity(db, {
         bookId: book._id,
@@ -241,6 +248,42 @@ export const recurringRoutes = new Hono<AppEnv>()
         entity: 'transaction',
         entityId: book._id,
         summary: `added ${added} monthly entr${added === 1 ? 'y' : 'ies'} for ${month}`,
+      });
+    }
+    return c.json({ added });
+  })
+
+  // "Mark paid" from the budget: adds this month's entry now, even before its day comes
+  // (rent paid on the 3rd when it's due on the 5th is dated the 3rd).
+  .post('/recurring/:id/pay', requirePermission('txn.create'), async (c) => {
+    const { month } = parse(recurringPaySchema, await c.req.json());
+    const db = c.get('db');
+    const book = c.get('book');
+    const rule = await findRule(db, book._id, c.req.param('id'));
+    const today = todayInAppZone();
+    if (month < rule.startMonth || month > today.slice(0, 7)) throw badRequest("It isn't due that month");
+    const already = await db.transactions.findOne({
+      bookId: book._id,
+      recurringId: rule._id,
+      deletedAt: { $exists: false },
+      date: monthRange(month),
+    });
+    if (already) return c.json({ added: 0 });
+    if (!(await db.categories.findOne({ _id: rule.categoryId, archived: false }))) {
+      throw badRequest('Its category is hidden. Unhide it or change the entry first.');
+    }
+    const due = recurringDate(month, rule.dayOfMonth);
+    const date = due > today ? today : due;
+    const added = await addFromRule(db, book._id, rule, month, date, c.get('userId'));
+    if (rule.skippedMonths.includes(month)) await db.recurring.updateOne({ _id: rule._id }, { $pull: { skippedMonths: month } });
+    if (added) {
+      await logActivity(db, {
+        bookId: book._id,
+        userId: c.get('userId'),
+        action: 'create',
+        entity: 'transaction',
+        entityId: rule._id,
+        summary: `marked a monthly ${rule.type} of ${formatMoney(rule.amount, book.currency)} paid for ${month}`,
       });
     }
     return c.json({ added });

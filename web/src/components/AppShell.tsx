@@ -17,6 +17,9 @@ import { Button, ErrorBanner, Field, fieldErrors, RoleBadge, Sheet } from './ui.
 /** Starting values for a new entry, e.g. the budget head it was added from. */
 export interface TransactionPrefill {
   categoryId?: string;
+  /** Minor units, e.g. what's still to pay on a bill. */
+  amount?: number;
+  note?: string;
 }
 const TxnSheetContext = createContext<(t?: TransactionDTO, prefill?: TransactionPrefill) => void>(() => undefined);
 export const useOpenTransaction = () => useContext(TxnSheetContext);
@@ -57,7 +60,7 @@ export function AppShell() {
   const [booksOpen, setBooksOpen] = useState(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const [viewedMonth, setViewedMonth] = useState<string | null>(null);
-  const [sheet, setSheet] = useState<{ open: boolean; txn: TransactionDTO | null; prefill: { categoryId?: string; date: string } }>({
+  const [sheet, setSheet] = useState<{ open: boolean; txn: TransactionDTO | null; prefill: TransactionPrefill & { date: string } }>({
     open: false,
     txn: null,
     prefill: { date: todayISO() },

@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type ObjectId } from 'mongodb';
-import type { AssignableRole, Role } from '@ffos/shared';
+import type { AssignableRole, HeadGroup, Role } from '@ffos/shared';
 import { env } from './env.ts';
 
 // ── document types ──
@@ -110,6 +110,12 @@ export interface CategoryDoc extends BookScoped {
   color: string;
   sort: number;
   archived: boolean;
+  /** Expense categories: how it's tracked as a budget head. Unset means "guess from the name". */
+  group?: HeadGroup;
+  /** A personal head (allowance) belonging to this member. */
+  memberId?: ObjectId;
+  /** Savings heads: a target to save up to. */
+  goal?: { target: number; by: string | null; start: number };
 }
 
 export interface TransactionDoc extends BookScoped {
@@ -146,6 +152,8 @@ export interface BudgetDoc {
   month: string; // YYYY-MM
   income: number;
   lines: { categoryId: ObjectId; planned: number }[];
+  /** Started automatically from this earlier month's plan; cleared once someone saves changes. */
+  carriedFrom?: string;
   version: number;
   createdBy: ObjectId;
   updatedBy: ObjectId;

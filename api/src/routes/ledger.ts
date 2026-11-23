@@ -3,12 +3,14 @@ import { ObjectId } from 'mongodb';
 import {
   can,
   canModifyRecord,
+  categoryBudgetSchema,
   categoryCreateSchema,
   categoryOrderSchema,
   categoryUpdateSchema,
   currentAppMonth,
   DELETED_RETENTION_DAYS,
   formatMoney,
+  guessHeadGroup,
   isCatchAllCategory,
   monthSchema,
   objectIdSchema,
@@ -17,6 +19,7 @@ import {
   transactionUpdateSchema,
   type CategoryDTO,
   type DeletedTransactionDTO,
+  type HeadGroup,
   type SummaryDTO,
   type TransactionDTO,
   type TransactionSearchDTO,
@@ -52,8 +55,23 @@ function csvCell(value: string): string {
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
-function toCategoryDTO(c: CategoryDoc): CategoryDTO {
-  return { id: c._id.toHexString(), name: c.name, kind: c.kind, icon: c.icon, color: c.color, archived: c.archived };
+/** The head group a category is tracked under: the one someone chose, else a guess from its name. */
+export function headGroupOf(c: Pick<CategoryDoc, 'name' | 'group'>): HeadGroup {
+  return c.group ?? guessHeadGroup(c.name);
+}
+
+export function toCategoryDTO(c: CategoryDoc): CategoryDTO {
+  return {
+    id: c._id.toHexString(),
+    name: c.name,
+    kind: c.kind,
+    icon: c.icon,
+    color: c.color,
+    archived: c.archived,
+    group: headGroupOf(c),
+    memberId: c.memberId?.toHexString() ?? null,
+    goal: c.goal ?? null,
+  };
 }
 
 export async function userNames(db: Collections, ids: ObjectId[]) {
@@ -163,6 +181,57 @@ export const ledgerRoutes = new Hono<AppEnv>()
     }
     const rows = await db.categories.find({ bookId }).sort({ kind: 1, sort: 1 }).toArray();
     return c.json(rows.map(toCategoryDTO));
+  })
+
+  // How an expense category works as a budget head: its group, whose allowance it is, and a savings goal.
+  // Part of planning the budget, so it needs budget.manage rather than setup.manage.
+  .patch('/categories/:id/budget', requirePermission('budget.manage'), async (c) => {
+    const input = parse(categoryBudgetSchema, await c.req.json());
+    const db = c.get('db');
+    const bookId = c.get('book')._id;
+    const id = oid(c.req.param('id'));
+    const existing = await db.categories.findOne({ _id: id, bookId });
+    if (!existing) throw notFound('Category not found');
+    if (existing.kind !== 'expense') throw badRequest('Only expense categories can be budget heads');
+
+    const $set: Partial<CategoryDoc> = {};
+    const $unset: Record<string, ''> = {};
+    if (input.group) $set.group = input.group;
+    if (input.memberId === null) $unset.memberId = '';
+    else if (input.memberId) {
+      const member = await db.bookMembers.findOne({ bookId, userId: oid(input.memberId) });
+      if (!member) throw badRequest('That person is not a member of this book', { memberId: 'Not a member of this book' });
+      $set.memberId = member.userId;
+    }
+    if (input.goal === null) $unset.goal = '';
+    else if (input.goal) $set.goal = { target: input.goal.target, by: input.goal.by ?? null, start: input.goal.start ?? 0 };
+
+    const changed = diff(existing, { ...$set, ...Object.fromEntries(Object.keys($unset).map((k) => [k, undefined])) } as Partial<CategoryDoc>);
+    if (!Object.keys(changed).length) return c.json(toCategoryDTO(existing));
+    const updated = await db.categories.findOneAndUpdate(
+      { _id: id, bookId },
+      {
+        $set: { ...$set, updatedBy: c.get('userId'), updatedAt: new Date() },
+        ...(Object.keys($unset).length ? { $unset } : {}),
+        $inc: { version: 1 },
+      },
+      { returnDocument: 'after' },
+    );
+    const parts = [
+      input.group && `made it a ${input.group === 'bills' ? 'bill' : input.group === 'savings' ? 'savings head' : 'spending head'}`,
+      input.memberId !== undefined && (input.memberId ? 'set whose allowance it is' : 'made it shared'),
+      input.goal !== undefined && (input.goal ? `set a goal of ${formatMoney(input.goal.target, c.get('book').currency)}` : 'removed its goal'),
+    ].filter(Boolean);
+    await logActivity(db, {
+      bookId,
+      userId: c.get('userId'),
+      action: 'update',
+      entity: 'category',
+      entityId: id,
+      summary: `changed budget head "${existing.name}": ${parts.join(', ')}`,
+      diff: changed,
+    });
+    return c.json(toCategoryDTO(updated!));
   })
 
   // Rename, recolour, change icon, hide or unhide.

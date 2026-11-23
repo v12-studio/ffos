@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { HEAD_GROUPS } from './categories.ts';
 import { ASSIGNABLE_ROLES } from './rbac.ts';
 
 export const phoneSchema = z
@@ -193,6 +194,23 @@ export const budgetSaveSchema = z
 
 export const budgetCopySchema = z.object({ from: monthSchema });
 
+/** How an expense category behaves as a budget head. Set by whoever plans the budget. */
+export const categoryBudgetSchema = z.object({
+  group: z.enum(HEAD_GROUPS).optional(),
+  memberId: objectIdSchema.nullable().optional(),
+  goal: z
+    .object({
+      target: amountSchema,
+      by: monthSchema.nullable().optional().default(null),
+      start: budgetAmountSchema.optional().default(0),
+    })
+    .nullable()
+    .optional(),
+});
+
+/** Mark a monthly bill paid for `month`, now rather than waiting for its day. */
+export const recurringPaySchema = z.object({ month: monthSchema });
+
 export type SetupInput = z.input<typeof setupSchema>;
 export type RegisterInput = z.input<typeof registerSchema>;
 export type LoginInput = z.input<typeof loginSchema>;
@@ -201,5 +219,6 @@ export type InviteCreateInput = z.input<typeof inviteCreateSchema>;
 export type TransactionCreateInput = z.input<typeof transactionCreateSchema>;
 export type TransactionUpdateInput = z.input<typeof transactionUpdateSchema>;
 export type BudgetSaveInput = z.input<typeof budgetSaveSchema>;
+export type CategoryBudgetInput = z.input<typeof categoryBudgetSchema>;
 export type RecurringCreateInput = z.input<typeof recurringCreateSchema>;
 export type RecurringUpdateInput = z.input<typeof recurringUpdateSchema>;

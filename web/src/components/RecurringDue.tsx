@@ -19,7 +19,7 @@ function shortDate(date: string): string {
 }
 
 /** "3 monthly entries due. Add them?" on the Overview for the current month. */
-export function RecurringDueCard({ month }: { month: string }) {
+export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /** Already shown elsewhere, e.g. as bills on the budget. */ hideCategoryIds?: Set<string> }) {
   const { book, can } = useCurrentBook();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -47,7 +47,7 @@ export function RecurringDueCard({ month }: { month: string }) {
     onSuccess: refresh,
   });
 
-  const items = due.data?.items ?? [];
+  const items = (due.data?.items ?? []).filter((i) => !hideCategoryIds?.has(i.recurring.categoryId));
   if (!items.length) return null;
   const canAdd = can('txn.create');
   const chosen = items.filter((i) => !unticked.has(i.recurring.id)).map((i) => i.recurring.id);

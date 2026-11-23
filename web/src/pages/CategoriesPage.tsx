@@ -205,7 +205,7 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
   });
   const errors = fieldErrors(save.error);
   const locked = existing ? isCatchAllCategory(existing) : false;
-  const preview: CategoryDTO = { id: 'preview', name: form.name, kind, icon: form.icon, color: form.color, archived: false };
+  const preview: CategoryDTO = { id: 'preview', name: form.name, kind, icon: form.icon, color: form.color, archived: false, group: 'spending', memberId: null, goal: null };
 
   return (
     <Sheet open={editing !== null} onClose={onClose} title={existing ? `Edit ${existing.name}` : `New ${kind} category`}>

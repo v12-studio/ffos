@@ -1,19 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, PiggyBank, ReceiptText } from 'lucide-react';
-import { useState } from 'react';
-import { Link } from 'react-router';
-import { formatMoney, type BudgetDTO, type CategoryDTO, type SummaryDTO } from '@ffos/shared';
+import { useQuery } from '@tanstack/react-query';
+import { ChevronRight, CircleCheck, PiggyBank, ReceiptText, X } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router';
+import { formatMoney, type BudgetDTO, type BudgetLineDTO, type CategoryDTO, type SummaryDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow, useOpenTransaction, useViewedMonth } from '../components/AppShell.tsx';
+import { HeadRow, PayButton, SafeToSpend } from '../components/BudgetParts.tsx';
 import { tileColor } from '../components/CategoryIcon.tsx';
 import { RecurringDueCard } from '../components/RecurringDue.tsx';
 import { TrendsCard } from '../components/TrendsCard.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { useToast } from '../components/Toast.tsx';
 import { Button, Card, EmptyState, ErrorBanner, PageSkeleton, SectionTitle } from '../components/ui.tsx';
-import { api, ApiError } from '../lib/api.ts';
+import { api } from '../lib/api.ts';
+import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { lineStatus, useBudget } from '../lib/budget.ts';
-import { currentMonth, monthLabel, shiftMonth } from '../lib/format.ts';
+import { lineStatus, needsAttention, useBudget } from '../lib/budget.ts';
+import { currentMonth, monthLabel, shiftMonth, todayISO } from '../lib/format.ts';
 
 export function HomePage() {
   const { book, can } = useCurrentBook();
@@ -26,36 +27,51 @@ export function HomePage() {
     queryFn: () => api.get<SummaryDTO>(`/books/${book.id}/summary?month=${month}`),
     refetchInterval: 60_000,
   });
+  const budget = useBudget(book.id, month);
   const byId = new Map((categories.data ?? []).map((c) => [c.id, c]));
   const s = summary.data;
+  const b = budget.data;
   const money = (n: number) => formatMoney(n, book.currency);
+  // With a plan, the Overview is about the budget; without one, it's the month's money in and out.
+  const planned = b?.exists === true && b.lines.length > 0;
 
   return (
     <div className="space-y-5">
       <PageTitle tab action={<MonthSwitcher month={month} onChange={setMonth} />}>
         Overview
       </PageTitle>
-      <ErrorBanner error={summary.error} />
+      <ErrorBanner error={summary.error ?? budget.error} />
 
-      {!s ? (
+      {!s || !b ? (
         <PageSkeleton />
       ) : (
         <>
-          <SummaryCard summary={s} month={month} money={money} />
-          {month === currentMonth() && <RecurringDueCard month={month} />}
+          {planned ? (
+            <BudgetOverview budget={b} month={month} byId={byId} />
+          ) : (
+            <SummaryCard summary={s} month={month} money={money} budget={b} />
+          )}
+          {month === currentMonth() && (
+            <RecurringDueCard
+              month={month}
+              hideCategoryIds={planned ? new Set(b.lines.filter((l) => l.group === 'bills' && l.due).map((l) => l.categoryId)) : undefined}
+            />
+          )}
 
           {s.count === 0 ? (
-            <Card>
-              <EmptyState icon={<ReceiptText className="size-5" />} title="No transactions this month">
-                {can('txn.create') ? (
-                  <Button className="mt-4" onClick={() => openTransaction()}>
-                    Add a transaction
-                  </Button>
-                ) : (
-                  'Entries added by members will appear here.'
-                )}
-              </EmptyState>
-            </Card>
+            !planned && (
+              <Card>
+                <EmptyState icon={<ReceiptText className="size-5" />} title="No transactions this month">
+                  {can('txn.create') ? (
+                    <Button className="mt-4" onClick={() => openTransaction()}>
+                      Add a transaction
+                    </Button>
+                  ) : (
+                    'Entries added by members will appear here.'
+                  )}
+                </EmptyState>
+              </Card>
+            )
           ) : (
             <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
               <section>
@@ -75,7 +91,7 @@ export function HomePage() {
                 </Card>
               </section>
 
-              {s.byCategory.length > 0 && <SpendingCard summary={s} byId={byId} month={month} money={money} />}
+              {!planned && s.byCategory.length > 0 && <SpendingCard summary={s} byId={byId} month={month} money={money} />}
             </div>
           )}
 
@@ -86,8 +102,190 @@ export function HomePage() {
   );
 }
 
-/** The month in one card: what's left, what came in and went out, and how the budget is doing. */
-function SummaryCard({ summary: s, month, money }: { summary: SummaryDTO; month: string; money: (n: number) => string }) {
+/** The budget at a glance: safe to spend today, what needs attention, bills to pay, savings. */
+function BudgetOverview({ budget: b, month, byId }: { budget: BudgetDTO; month: string; byId: Map<string, CategoryDTO> }) {
+  const { book } = useCurrentBook();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const money = (n: number) => formatMoney(n, book.currency);
+  const today = b.today ?? undefined;
+  const budgetLink = (extra = '') => {
+    const q = new URLSearchParams(extra);
+    if (month !== currentMonth()) q.set('month', month);
+    const qs = q.toString();
+    return `/budget${qs ? `?${qs}` : ''}`;
+  };
+  const open = (line: BudgetLineDTO) => navigate(budgetLink(`head=${line.categoryId}`));
+  const row = (line: BudgetLineDTO, action?: ReactNode) => (
+    <HeadRow key={line.categoryId} line={line} category={byId.get(line.categoryId)} currency={book.currency} today={today} onOpen={() => open(line)} action={action} />
+  );
+
+  const attention = b.lines.filter((l) => needsAttention(l, today));
+  const mine = b.lines.filter((l) => user && byId.get(l.categoryId)?.memberId === user.id && !attention.includes(l));
+  const bills = b.lines.filter((l) => l.group === 'bills');
+  const unpaid = bills
+    .filter((l) => lineStatus(l) === 'ok')
+    .sort((x, y) => (x.due?.date ?? '9999').localeCompare(y.due?.date ?? '9999'));
+  const savings = b.lines.filter((l) => l.group === 'savings');
+  const savingsPlanned = savings.reduce((sum, l) => sum + l.planned, 0);
+  const goals = savings.filter((l) => l.goal);
+  const t = b.totals;
+  const finished = month < currentMonth();
+  const over = b.lines.filter((l) => lineStatus(l) === 'over').length;
+  const savedSoFar = (t.incomeReceived > 0 ? t.incomeReceived : b.income) - t.spent;
+
+  return (
+    <>
+      <Card className="overflow-hidden">
+        <div className="p-4">
+          {today && b.lines.some((l) => l.group === 'spending') ? (
+            <SafeToSpend budget={b} currency={book.currency} />
+          ) : finished ? (
+            <>
+              <p className="text-label font-medium text-muted">Saved in {monthLabel(month).split(' ')[0]}</p>
+              <p className={`text-display font-semibold tracking-tight tabular ${savedSoFar < 0 ? 'text-negative' : 'text-positive'}`}>
+                {savedSoFar < 0 ? '−' : ''}
+                {money(Math.abs(savedSoFar))}
+              </p>
+              <p className="mt-0.5 text-label text-muted tabular">Planned {money(t.plannedSavings)}</p>
+            </>
+          ) : (
+            <>
+              <p className="text-label font-medium text-muted">Planned for {monthLabel(month).split(' ')[0]}</p>
+              <p className="text-display font-semibold tracking-tight tabular">{money(t.allocated)}</p>
+              <p className="mt-0.5 text-label text-muted tabular">Of {money(b.income)} income</p>
+            </>
+          )}
+        </div>
+        {!finished && (
+          <Link to={budgetLink()} className="flex min-h-12 items-center gap-3 border-t border-line px-4 py-2.5 text-label hover:bg-subtle/60">
+            <PiggyBank className="size-4 shrink-0 text-muted" />
+            <span className="min-w-0 flex-1">
+              {t.projectedSavings >= 0 ? 'On track to save ' : 'Heading for a shortfall of '}
+              <strong className={`font-semibold tabular ${t.projectedSavings < 0 ? 'text-negative' : 'text-positive'}`}>{money(Math.abs(t.projectedSavings))}</strong>
+              {over > 0 && <span className="text-negative"> · {over} over budget</span>}
+            </span>
+            <ChevronRight className="size-4 shrink-0 text-muted" />
+          </Link>
+        )}
+      </Card>
+
+      {month === currentMonth() && <LastMonthReview month={month} />}
+
+      {attention.length > 0 && (
+        <section>
+          <SectionTitle
+            action={
+              <Link to={budgetLink()} className="text-label font-medium text-accent">
+                Budget
+              </Link>
+            }
+          >
+            Needs attention
+          </SectionTitle>
+          <Card className="divide-y divide-line overflow-hidden">{attention.slice(0, 4).map((l) => row(l))}</Card>
+          {attention.length > 4 && <p className="mt-2 px-0.5 text-label text-muted">and {attention.length - 4} more on the Budget tab.</p>}
+        </section>
+      )}
+
+      {mine.length > 0 && (
+        <section>
+          <SectionTitle>Your allowance</SectionTitle>
+          <Card className="divide-y divide-line overflow-hidden">{mine.map((l) => row(l))}</Card>
+        </section>
+      )}
+
+      {bills.length > 0 && !finished && (
+        <section>
+          <SectionTitle action={<span className="text-label text-muted">{bills.length - unpaid.length} of {bills.length} paid</span>}>Bills</SectionTitle>
+          {unpaid.length === 0 ? (
+            <Card className="flex min-h-12 items-center gap-2 px-4 text-label">
+              <CircleCheck className="size-4 text-positive" /> All bills paid for {monthLabel(month).split(' ')[0]}
+            </Card>
+          ) : (
+            <Card className="divide-y divide-line overflow-hidden">
+              {unpaid.slice(0, 4).map((l) => row(l, <PayButton line={l} month={month} />))}
+            </Card>
+          )}
+          {unpaid.length > 0 && unpaid.some((l) => l.due && l.due.date <= todayISO()) && (
+            <p className="mt-2 px-0.5 text-label text-warning">Some bills are due. Mark them paid once they're done.</p>
+          )}
+        </section>
+      )}
+
+      {(savingsPlanned > 0 || t.saved > 0) && (
+        <section>
+          <SectionTitle>Savings</SectionTitle>
+          <Card className="divide-y divide-line overflow-hidden">
+            <Link to={budgetLink()} className="flex min-h-12 items-center gap-3 px-4 text-label hover:bg-subtle/60">
+              <span className="min-w-0 flex-1">
+                Put aside <strong className="font-semibold text-positive tabular">{money(t.saved)}</strong>
+                {savingsPlanned > 0 && <span className="text-muted tabular"> of {money(savingsPlanned)} planned</span>}
+              </span>
+              <ChevronRight className="size-4 shrink-0 text-muted" />
+            </Link>
+            {goals.map((l) => row(l))}
+          </Card>
+        </section>
+      )}
+    </>
+  );
+}
+
+/** First week of a month: how last month went, until dismissed. */
+function LastMonthReview({ month }: { month: string }) {
+  const { book } = useCurrentBook();
+  const previous = shiftMonth(month, -1);
+  const key = `ffos.review.${book.id}.${previous}`;
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem(key) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const early = Number(todayISO().slice(8, 10)) <= 7;
+  const prev = useBudget(book.id, previous, early && !dismissed);
+  const p = prev.data;
+  if (!early || dismissed || !p?.exists || !p.saved) return null;
+  const money = (n: number) => formatMoney(n, book.currency);
+  const income = p.totals.incomeReceived > 0 ? p.totals.incomeReceived : p.income;
+  const saved = income - p.totals.spent;
+  const over = p.lines.filter((l) => l.group !== 'savings' && l.remaining < 0).length;
+  const name = monthLabel(previous).split(' ')[0];
+  return (
+    <Card className="flex items-center gap-1 overflow-hidden">
+      <Link to={`/budget?month=${previous}`} className="flex min-h-14 min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-label hover:bg-subtle/60">
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">How {name} went</span>
+          <span className="block text-muted tabular">
+            {saved >= 0 ? `Saved ${money(saved)}` : `Short by ${money(-saved)}`} of {money(p.totals.plannedSavings)} planned
+            {over > 0 && ` · ${over} head${over === 1 ? '' : 's'} over`}
+          </span>
+        </span>
+        <ChevronRight className="size-4 shrink-0 text-muted" />
+      </Link>
+      <button
+        onClick={() => {
+          try {
+            localStorage.setItem(key, '1');
+          } catch {
+            // Private mode: it just shows again next time.
+          }
+          setDismissed(true);
+        }}
+        className="mr-2 grid size-9 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle"
+        aria-label={`Dismiss ${name} review`}
+      >
+        <X className="size-4" />
+      </button>
+    </Card>
+  );
+}
+
+/** No plan yet: the month's money in and out, and an invitation to plan it. */
+function SummaryCard({ summary: s, month, money, budget }: { summary: SummaryDTO; month: string; money: (n: number) => string; budget: BudgetDTO }) {
+  const { can } = useCurrentBook();
   const thisMonth = month === currentMonth();
   return (
     <Card className="overflow-hidden">
@@ -108,74 +306,20 @@ function SummaryCard({ summary: s, month, money }: { summary: SummaryDTO; month:
           </span>
         </p>
       </div>
-      <BudgetLine month={month} money={money} />
+      {can('budget.manage') && (
+        <Link
+          to={budget.exists ? (month === currentMonth() ? '/budget' : `/budget?month=${month}`) : `/budget/${month}/edit`}
+          className="flex min-h-12 items-center gap-3 border-t border-line px-4 py-2.5 text-label hover:bg-subtle/60"
+        >
+          <PiggyBank className="size-4 shrink-0 text-muted" />
+          <span className="min-w-0 flex-1">
+            <span className="font-medium">Plan {monthLabel(month).split(' ')[0]}'s budget</span>
+            <span className="block text-muted">Split income into bills, spending and savings, and see what's safe to spend each day.</span>
+          </span>
+          <ChevronRight className="size-4 shrink-0 text-muted" />
+        </Link>
+      )}
     </Card>
-  );
-}
-
-/** One tappable line under the summary: savings on track and how many heads are over. */
-function BudgetLine({ month, money }: { month: string; money: (n: number) => string }) {
-  const { book, can } = useCurrentBook();
-  const queryClient = useQueryClient();
-  const toast = useToast();
-  const budget = useBudget(book.id, month);
-  const b = budget.data;
-  const canPlan = can('budget.manage');
-  const previous = shiftMonth(month, -1);
-  // Only needed to offer copying last month's plan, so only fetched when this month has none.
-  const previousBudget = useBudget(book.id, previous, canPlan && b?.exists === false);
-  const copy = useMutation({
-    mutationFn: () => api.post<BudgetDTO>(`/books/${book.id}/budget/${month}/copy`, { from: previous }),
-    onSuccess: (data) => {
-      queryClient.setQueryData(['book', book.id, 'budget', month], data);
-      toast({ message: `Copied ${monthLabel(previous).split(' ')[0]}'s plan to ${monthLabel(month).split(' ')[0]}`, duration: 2500 });
-    },
-  });
-  if (!b) return null;
-  const monthName = monthLabel(month).split(' ')[0];
-  const rowClass = 'flex min-h-12 items-center gap-3 border-t border-line px-4 py-2.5 text-label hover:bg-subtle/60';
-
-  if (!b.exists) {
-    if (!canPlan) return null;
-    const canCopy = previousBudget.data?.exists === true && previousBudget.data.lines.length > 0;
-    return (
-      <div className="border-t border-line px-4 py-3">
-        <p className="flex items-center gap-2 text-label font-medium">
-          <PiggyBank className="size-4 shrink-0 text-muted" /> No budget for {monthName} yet
-        </p>
-        <div className="mt-2.5 flex gap-2">
-          {canCopy && (
-            <Button className="min-h-10 flex-1 text-label" loading={copy.isPending} onClick={() => copy.mutate()}>
-              Copy {monthLabel(previous).split(' ')[0]}'s plan
-            </Button>
-          )}
-          <Link
-            to={`/budget/${month}/edit`}
-            className={`inline-flex min-h-10 items-center justify-center rounded-lg px-4 text-label font-medium ${
-              canCopy ? 'border border-line bg-surface text-ink hover:bg-subtle' : 'flex-1 bg-primary text-primary-fg hover:bg-primary/90'
-            }`}
-          >
-            {canCopy ? 'Start fresh' : `Plan ${monthName}`}
-          </Link>
-        </div>
-        {copy.error && <p className="mt-2 text-label text-negative">{copy.error instanceof ApiError ? copy.error.message : 'Could not copy'}</p>}
-      </div>
-    );
-  }
-
-  const savings = b.totals.projectedSavings;
-  const finished = month < currentMonth();
-  const over = b.lines.filter((l) => lineStatus(l) === 'over').length;
-  return (
-    <Link to={month === currentMonth() ? '/budget' : `/budget?month=${month}`} className={rowClass}>
-      <PiggyBank className="size-4 shrink-0 text-muted" />
-      <span className="min-w-0 flex-1">
-        {savings >= 0 ? (finished ? 'Saved ' : 'On track to save ') : finished ? 'Short by ' : 'Heading for a shortfall of '}
-        <strong className={`font-semibold tabular ${savings < 0 ? 'text-negative' : 'text-positive'}`}>{money(Math.abs(savings))}</strong>
-        {over > 0 && <span className="text-negative"> · {over} over budget</span>}
-      </span>
-      <ChevronRight className="size-4 shrink-0 text-muted" />
-    </Link>
   );
 }
 

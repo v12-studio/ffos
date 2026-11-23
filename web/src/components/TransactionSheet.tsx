@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronRight, CopyPlus, Delete, Repeat, Search, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router';
 import {
   canModifyRecord,
   formatMoney,
@@ -8,13 +9,14 @@ import {
   toMinor,
   type BudgetLineDTO,
   type CategoryDTO,
+  type HeadGroup,
   type TransactionDTO,
 } from '@ffos/shared';
 import { api, ApiError } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { lineStatus, statusText, useBudget } from '../lib/budget.ts';
-import { monthLabel, todayISO } from '../lib/format.ts';
+import { leftLabel, lineStatus, statusText, useBudget } from '../lib/budget.ts';
+import { currentMonth, monthLabel, todayISO } from '../lib/format.ts';
 import { enqueue, isNetworkError, newClientId } from '../lib/offline.ts';
 import { recentCategoryIds, rememberCategory } from '../lib/recent.ts';
 import { loadSnapshot, saveSnapshot } from '../lib/snapshot.ts';
@@ -62,13 +64,14 @@ export function TransactionSheet({
   open: boolean;
   onClose: () => void;
   transaction?: TransactionDTO | null;
-  /** For a new entry: the date (follows the month being viewed) and, optionally, a category. */
-  prefill?: { categoryId?: string; date?: string };
+  /** For a new entry: the date (follows the month being viewed) and, optionally, a category, amount and note. */
+  prefill?: { categoryId?: string; date?: string; amount?: number; note?: string };
 }) {
   const { book, can } = useCurrentBook();
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const toast = useToast();
+  const navigate = useNavigate();
   const categories = useCategories(book.id);
 
   const [type, setType] = useState<'expense' | 'income'>('expense');
@@ -103,10 +106,10 @@ export function TransactionSheet({
   useEffect(() => {
     if (!open) return;
     setType(initial?.type ?? 'expense');
-    setAmount(initial ? String(initial.amount / 100) : '');
+    setAmount(initial ? String(initial.amount / 100) : prefill?.amount ? String(prefill.amount / 100) : '');
     setDate(initial?.date ?? prefill?.date ?? todayISO());
     setCategoryId(initial?.categoryId ?? prefill?.categoryId ?? '');
-    setNote(initial?.note ?? '');
+    setNote(initial?.note ?? prefill?.note ?? '');
     setNewCategory('');
     setRepeat(false);
     setAsNew(false);
@@ -155,8 +158,16 @@ export function TransactionSheet({
       rememberCategory(book.id, categoryId);
       invalidate();
       onClose();
-      if (type === 'expense' && budgetCheck?.inBudget && budgetCheck.leftAfter < 0) {
-        toast({ message: `${budgetCheck.name} is ${formatMoney(-budgetCheck.leftAfter, book.currency)} over budget` });
+      // Going over a bill or spending head: offer to cover it from another head straight away.
+      if (type === 'expense' && budgetCheck?.inBudget && budgetCheck.group !== 'savings' && budgetCheck.leftAfter < 0) {
+        const month = budgetMonth;
+        const id = categoryId;
+        toast({
+          message: `${budgetCheck.name} is ${formatMoney(-budgetCheck.leftAfter, book.currency)} over budget`,
+          ...(can('budget.manage')
+            ? { action: { label: 'Cover it', onClick: () => navigate(`/budget?cover=${id}${month === currentMonth() ? '' : `&month=${month}`}`) } }
+            : {}),
+        });
       }
     },
   });
@@ -196,7 +207,11 @@ export function TransactionSheet({
   const recent = useMemo(() => (open ? recentCategoryIds(book.id) : []), [open, book.id]);
   // This month's budget heads first (in plan order), then the ones this person used most
   // recently, then the rest in the book's order, "Other" last.
-  const headOrder = new Map((budget.data?.lines ?? []).map((l, i) => [l.categoryId, i]));
+  // A person's own allowance heads come first for them.
+  const isMine = (id: string) => categories.data?.find((c) => c.id === id)?.memberId === user?.id;
+  const headOrder = new Map(
+    (budget.data?.lines ?? []).map((l, i) => [l.categoryId, (isMine(l.categoryId) ? -500 : 0) + i]),
+  );
   const rank = (c: CategoryDTO) => {
     if (headOrder.has(c.id)) return headOrder.get(c.id)!;
     if (isCatchAllCategory(c)) return 10_000;
@@ -268,7 +283,7 @@ export function TransactionSheet({
         ? transaction.amount
         : 0;
     const leftBefore = line.planned - (line.spent - alreadyCounted);
-    return { name, inBudget: true as const, planned: line.planned, leftBefore, leftAfter: leftBefore - minor };
+    return { name, inBudget: true as const, group: line.group, planned: line.planned, leftBefore, leftAfter: leftBefore - minor };
   }, [budget.data, categoryId, selectedCategory?.name, budgetMonth, transaction, minor]);
 
   const title = isEdit ? (canSave ? 'Edit transaction' : 'Transaction details') : 'New transaction';
@@ -566,14 +581,8 @@ export function TransactionSheet({
   );
 }
 
-function leftLabel(line: BudgetLineDTO, currency: string): string {
-  const left = line.planned - line.spent;
-  if (left === 0 && line.planned > 0) return 'Fully used';
-  return left >= 0 ? `${formatMoney(left, currency)} left` : `${formatMoney(-left, currency)} over`;
-}
-
-/** Spent exactly to plan (rent, fees) is done, not a warning. */
-const leftTone = (line: BudgetLineDTO) => (line.planned > 0 && line.spent === line.planned ? 'text-muted' : statusText[lineStatus(line)]);
+/** Done (paid, saved, used exactly) is calm, not a warning. */
+const leftTone = (line: BudgetLineDTO) => statusText[lineStatus(line)];
 
 /** A quick-pick button. Budget heads (`line` given) also show what's left. */
 function CategoryCell({
@@ -656,13 +665,25 @@ function ordinal(n: number): string {
 
 type BudgetCheck =
   | { name: string; inBudget: false; monthName: string }
-  | { name: string; inBudget: true; planned: number; leftBefore: number; leftAfter: number };
+  | { name: string; inBudget: true; group: HeadGroup; planned: number; leftBefore: number; leftAfter: number };
 
 /** "₹4,400 left in Food" — or a warning when this entry takes the head over its limit. */
 function BudgetHint({ check, currency }: { check: BudgetCheck; currency: string }) {
   const money = (n: number) => formatMoney(n, currency);
   if (!check.inBudget) {
     return <p className="text-label text-muted">{check.name} isn't a budget head in {check.monthName}.</p>;
+  }
+  if (check.group === 'savings') {
+    return (
+      <p className="text-label text-muted tabular">
+        {check.leftAfter > 0
+          ? `${money(check.leftAfter)} more to put aside in ${check.name} after this`
+          : `${check.name} is fully put aside for the month`}
+      </p>
+    );
+  }
+  if (check.group === 'bills' && check.leftAfter === 0) {
+    return <p className="text-label text-muted tabular">This pays {check.name} in full</p>;
   }
   if (check.leftAfter < 0) {
     const alreadyOver = check.leftBefore <= 0;
@@ -680,7 +701,9 @@ function BudgetHint({ check, currency }: { check: BudgetCheck; currency: string 
   }
   return (
     <p className="text-label text-muted tabular">
-      {money(check.leftAfter)} left in {check.name} after this · limit {money(check.planned)}
+      {check.group === 'bills'
+        ? `${money(check.leftAfter)} of ${check.name} still to pay after this`
+        : `${money(check.leftAfter)} left in ${check.name} after this · limit ${money(check.planned)}`}
     </p>
   );
 }

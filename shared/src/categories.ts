@@ -3,20 +3,45 @@ export interface DefaultCategory {
   kind: 'income' | 'expense';
   icon: string;
   color: string;
+  group?: HeadGroup;
 }
 
-/** Seeded into every new book. */
+/**
+ * What kind of budget head an expense category is. Each is tracked differently:
+ * bills are paid once (paid / due), spending is drawn down through the month (pace),
+ * savings are money put aside, so they count as saved rather than spent.
+ */
+export const HEAD_GROUPS = ['bills', 'spending', 'savings'] as const;
+export type HeadGroup = (typeof HEAD_GROUPS)[number];
+
+export const HEAD_GROUP_LABELS: Record<HeadGroup, { name: string; description: string }> = {
+  bills: { name: 'Bills', description: 'Paid once a month: rent, EMIs, electricity, fees' },
+  spending: { name: 'Spending', description: 'Day-to-day: milk, vegetables, fuel, eating out' },
+  savings: { name: 'Savings', description: 'Put aside: chit, SIP, post office, goals. Counted as saved, not spent' },
+};
+
+const BILL_WORDS =
+  /\b(rent|emi|emis|loan|loans|bill|bills|electricity|eb|water|gas|cylinder|internet|wifi|broadband|recharge|insurance|premium|lic|fees?|tuition|school|subscriptions?|netflix|maintenance|credit card)\b/i;
+const SAVINGS_WORDS = /\b(seetu|chit|chits|sip|sips|savings?|post office|rd|fd|ppf|nps|mutual funds?|investments?|gold scheme|emergency fund)\b/i;
+
+/** A best guess from the name, used until someone picks a group for the category. */
+export function guessHeadGroup(name: string): HeadGroup {
+  if (SAVINGS_WORDS.test(name)) return 'savings';
+  if (BILL_WORDS.test(name)) return 'bills';
+  return 'spending';
+}
+
 /** Seeded into every new book. `icon` is a key into the web app's icon set. */
 export const DEFAULT_CATEGORIES: DefaultCategory[] = [
   { name: 'Groceries', kind: 'expense', icon: 'cart', color: '#15803d' },
   { name: 'Food & Dining', kind: 'expense', icon: 'utensils', color: '#c2410c' },
-  { name: 'Rent', kind: 'expense', icon: 'home', color: '#6d28d9' },
-  { name: 'Utilities', kind: 'expense', icon: 'zap', color: '#a16207' },
+  { name: 'Rent', kind: 'expense', icon: 'home', color: '#6d28d9', group: 'bills' },
+  { name: 'Utilities', kind: 'expense', icon: 'zap', color: '#a16207', group: 'bills' },
   { name: 'Fuel & Transport', kind: 'expense', icon: 'fuel', color: '#0e7490' },
   { name: 'Shopping', kind: 'expense', icon: 'bag', color: '#be185d' },
   { name: 'Medical', kind: 'expense', icon: 'pill', color: '#b91c1c' },
-  { name: 'Education', kind: 'expense', icon: 'education', color: '#1d4ed8' },
-  { name: 'EMI & Loans', kind: 'expense', icon: 'bank', color: '#475569' },
+  { name: 'Education', kind: 'expense', icon: 'education', color: '#1d4ed8', group: 'bills' },
+  { name: 'EMI & Loans', kind: 'expense', icon: 'bank', color: '#475569', group: 'bills' },
   { name: 'Entertainment', kind: 'expense', icon: 'film', color: '#7e22ce' },
   { name: 'Other', kind: 'expense', icon: 'package', color: '#64748b' },
   { name: 'Salary', kind: 'income', icon: 'briefcase', color: '#047857' },

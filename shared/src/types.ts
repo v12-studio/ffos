@@ -1,3 +1,4 @@
+import type { HeadGroup } from './categories.ts';
 import type { AssignableRole, Permission, Role } from './rbac.ts';
 
 // API response shapes shared by the API and the web app. Ids are hex strings.
@@ -68,6 +69,20 @@ export interface CategoryDTO {
   color: string;
   /** Hidden from pickers; kept so older transactions still show their category. */
   archived: boolean;
+  /** Expense categories only: how it's tracked as a budget head. Guessed from the name until someone sets it. */
+  group: HeadGroup;
+  /** A personal head (an allowance): the member whose spending it is. */
+  memberId: string | null;
+  /** Savings heads: what it's being saved up for. */
+  goal: CategoryGoal | null;
+}
+
+export interface CategoryGoal {
+  target: number;
+  /** Month to reach it by (YYYY-MM), if there's a deadline. */
+  by: string | null;
+  /** Already saved before it was tracked here. */
+  start: number;
 }
 
 export interface TransactionDTO {
@@ -133,35 +148,67 @@ export interface DeletedTransactionDTO extends TransactionDTO {
 
 export interface BudgetLineDTO {
   categoryId: string;
+  group: HeadGroup;
   planned: number;
   spent: number;
   /** planned − spent; negative when over budget. */
   remaining: number;
+  /** Bills set up as monthly entries: when it falls due this month and whether it's been added. */
+  due: { date: string; recurringIds: string[]; paid: boolean } | null;
+  /** Savings heads with a goal: progress up to the end of this month. */
+  goal: { target: number; by: string | null; saved: number; monthlyNeeded: number | null } | null;
 }
 
 /**
  * One month's plan and how it's going. All amounts are minor units.
- * "Planned savings" is income left unallocated; "projected savings" is what's left if every
- * head ends exactly at its limit (or where it already is, if over) and no more unbudgeted spending happens.
+ * Savings heads count as money saved, not spent. "Planned savings" is income minus what's planned for
+ * bills and spending; "projected savings" is what's left if every bill and spending head ends exactly at
+ * its limit (or where it already is, if over) and no more unbudgeted spending happens.
  */
 export interface BudgetDTO {
   month: string;
-  /** false when nothing has been planned for this month yet (lines/income are empty). */
+  /** false when there's no plan for this month and none before it to carry over. */
   exists: boolean;
+  /** true when this month has its own saved plan; false when it's following an earlier month's. */
+  saved: boolean;
+  /** The month this plan was carried over from, until someone changes it. */
+  carriedFrom: string | null;
   version: number;
   income: number;
   lines: BudgetLineDTO[];
   /** Expenses this month in categories that have no budget head. */
-  unbudgeted: { categoryId: string; spent: number }[];
+  unbudgeted: { categoryId: string; group: HeadGroup; spent: number }[];
   totals: {
     allocated: number;
+    /** Income not given to any head. */
+    unallocated: number;
     plannedSavings: number;
+    /** Expenses that aren't savings. */
     spent: number;
+    /** Put into savings heads (or unbudgeted savings categories) this month. */
+    saved: number;
     overspent: number;
     projectedSavings: number;
     /** Income transactions actually recorded this month, for comparison with the plan. */
     incomeReceived: number;
   };
+  /** Only for the current month: where we are in it, and what can still be spent per day. */
+  today: {
+    day: number;
+    daysInMonth: number;
+    /** Including today. */
+    daysLeft: number;
+    /** What's left across spending heads (not bills or savings), ignoring heads already over. */
+    spendingLeft: number;
+    safePerDay: number;
+  } | null;
+}
+
+/** For planning: what each expense category usually takes, from the months before. */
+export interface BudgetSuggestionsDTO {
+  /** The months averaged, oldest first. */
+  months: string[];
+  byCategory: { categoryId: string; average: number; last: number }[];
 }
 
 export interface SummaryDTO {
