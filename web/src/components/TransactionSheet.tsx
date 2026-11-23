@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronRight, CopyPlus, Delete, Repeat, Search, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   canModifyRecord,
   formatMoney,
@@ -18,7 +18,7 @@ import { monthLabel, todayISO } from '../lib/format.ts';
 import { enqueue, isNetworkError, newClientId } from '../lib/offline.ts';
 import { recentCategoryIds, rememberCategory } from '../lib/recent.ts';
 import { loadSnapshot, saveSnapshot } from '../lib/snapshot.ts';
-import { CategoryGlyph, CategoryTile } from './CategoryIcon.tsx';
+import { CategoryTile } from './CategoryIcon.tsx';
 import { useToast } from './Toast.tsx';
 import { Button, ErrorBanner, inputClass, Segmented, Sheet } from './ui.tsx';
 
@@ -37,8 +37,10 @@ export function useCategories(bookId: string) {
   });
 }
 
-// How many categories the quick-pick strip shows; the rest are under "All".
+// Without a budget, how many categories the quick picks show; the rest are under "All".
 const STRIP_SIZE = 12;
+// Quick picks come in pages of 3 columns × 2 rows, swiped sideways.
+const PAGE_SIZE = 6;
 
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'] as const;
 
@@ -55,10 +57,13 @@ export function TransactionSheet({
   open,
   onClose,
   transaction: initial,
+  prefill,
 }: {
   open: boolean;
   onClose: () => void;
   transaction?: TransactionDTO | null;
+  /** For a new entry: the date (follows the month being viewed) and, optionally, a category. */
+  prefill?: { categoryId?: string; date?: string };
 }) {
   const { book, can } = useCurrentBook();
   const { user } = useAuth();
@@ -99,8 +104,8 @@ export function TransactionSheet({
     if (!open) return;
     setType(initial?.type ?? 'expense');
     setAmount(initial ? String(initial.amount / 100) : '');
-    setDate(initial?.date ?? todayISO());
-    setCategoryId(initial?.categoryId ?? '');
+    setDate(initial?.date ?? prefill?.date ?? todayISO());
+    setCategoryId(initial?.categoryId ?? prefill?.categoryId ?? '');
     setNote(initial?.note ?? '');
     setNewCategory('');
     setRepeat(false);
@@ -111,7 +116,7 @@ export function TransactionSheet({
     addCategory.reset();
     save.reset();
     remove.reset();
-  }, [open, initial]);
+  }, [open, initial, prefill]);
 
   // Physical keyboard support for desktop.
   useEffect(() => {
@@ -211,13 +216,29 @@ export function TransactionSheet({
   const offerNewCategory = canSave && can('txn.create') && selectedCategory !== undefined && isCatchAllCategory(selectedCategory);
   const conflict = save.error instanceof ApiError && save.error.status === 409;
 
-  // Quick picks: what this person used last, then the order above. The selected one always shows.
-  const recentRank = (c: CategoryDTO) => {
-    const r = recent.indexOf(c.id);
-    return r >= 0 ? r : recent.length;
+  // Quick picks. With a budget: every head, in the plan's order (arranged on the Budget page), so each
+  // head is always in the same spot. Without one: the order above. The selected one always shows.
+  const stripHeads = budgetOptions.length > 0;
+  let strip = stripHeads ? budgetOptions : options.slice(0, STRIP_SIZE);
+  if (selectedCategory && !strip.includes(selectedCategory)) strip = [selectedCategory, ...strip];
+  const pages: CategoryDTO[][] = [];
+  for (let i = 0; i < strip.length; i += PAGE_SIZE) pages.push(strip.slice(i, i + PAGE_SIZE));
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [page, setPage] = useState(0);
+  const pageStride = () => {
+    const el = stripRef.current;
+    const first = el?.children[0] as HTMLElement | undefined;
+    const second = el?.children[1] as HTMLElement | undefined;
+    return first && second ? second.offsetLeft - first.offsetLeft : (el?.clientWidth ?? 1);
   };
-  let strip = [...options].sort((a, b) => recentRank(a) - recentRank(b)).slice(0, STRIP_SIZE);
-  if (selectedCategory && !strip.includes(selectedCategory)) strip = [selectedCategory, ...strip.slice(0, -1)];
+  // Opening on an entry whose category is on a later page shows that page.
+  const selectedPage = Math.max(0, Math.floor(strip.findIndex((c) => c.id === categoryId) / PAGE_SIZE));
+  useEffect(() => {
+    if (!open || view !== 'form') return;
+    const el = stripRef.current;
+    if (el) el.scrollLeft = selectedPage * pageStride();
+    setPage(selectedPage);
+  }, [open, view, type, initial]);
   const searchText = categorySearch.trim().toLowerCase();
   const matchesSearch = (c: CategoryDTO) => c.name.toLowerCase().includes(searchText);
   const categoryGroups: [string, CategoryDTO[]][] = (
@@ -435,26 +456,44 @@ export function TransactionSheet({
         </div>
 
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <p className="text-label font-medium">Category</p>
+          <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
+            <p className="flex items-center gap-2 text-label font-medium">
+              {stripHeads ? 'Budget head' : 'Category'}
+              {pages.length > 1 && (
+                <span className="flex gap-1" aria-hidden>
+                  {pages.map((_, i) => (
+                    <span key={i} className={`size-1.5 rounded-full transition-colors ${i === page ? 'bg-ink' : 'bg-line'}`} />
+                  ))}
+                </span>
+              )}
+            </p>
             {canSave && options.length > strip.length && (
               <button onClick={() => setView('categories')} className="-my-1 flex min-h-7 items-center gap-0.5 text-label font-medium text-accent">
-                All {options.length}
+                {stripHeads ? 'Other categories' : `All ${options.length}`}
                 <ChevronRight className="size-3.5" />
               </button>
             )}
           </div>
-          <div className="no-scrollbar -mx-5 grid auto-cols-[8.5rem] grid-flow-col grid-rows-2 gap-1.5 overflow-x-auto px-5">
-            {strip.map((c) => (
-              <CategoryCell
-                key={c.id}
-                category={c}
-                selected={categoryId === c.id}
-                disabled={!canSave}
-                onSelect={() => setCategoryId(c.id)}
-                line={lineById.get(c.id)}
-                currency={book.currency}
-              />
+          {/* Full pages that snap into place, so no button is ever half off the edge. */}
+          <div
+            ref={stripRef}
+            onScroll={(e) => setPage(Math.round(e.currentTarget.scrollLeft / pageStride()))}
+            className="no-scrollbar -mx-5 flex snap-x snap-mandatory gap-5 overflow-x-auto scroll-px-5 px-5"
+          >
+            {pages.map((list, i) => (
+              <div key={i} className="grid w-full shrink-0 snap-start grid-cols-3 grid-rows-2 gap-1.5" aria-label={pages.length > 1 ? `Page ${i + 1} of ${pages.length}` : undefined}>
+                {list.map((c) => (
+                  <CategoryCell
+                    key={c.id}
+                    category={c}
+                    selected={categoryId === c.id}
+                    disabled={!canSave}
+                    onSelect={() => setCategoryId(c.id)}
+                    line={lineById.get(c.id)}
+                    currency={book.currency}
+                  />
+                ))}
+              </div>
             ))}
           </div>
         </div>
@@ -529,8 +568,12 @@ export function TransactionSheet({
 
 function leftLabel(line: BudgetLineDTO, currency: string): string {
   const left = line.planned - line.spent;
+  if (left === 0 && line.planned > 0) return 'Fully used';
   return left >= 0 ? `${formatMoney(left, currency)} left` : `${formatMoney(-left, currency)} over`;
 }
+
+/** Spent exactly to plan (rent, fees) is done, not a warning. */
+const leftTone = (line: BudgetLineDTO) => (line.planned > 0 && line.spent === line.planned ? 'text-muted' : statusText[lineStatus(line)]);
 
 /** A quick-pick button. Budget heads (`line` given) also show what's left. */
 function CategoryCell({
@@ -557,12 +600,9 @@ function CategoryCell({
         selected ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface hover:bg-subtle'
       }`}
     >
-      <span className="flex min-w-0 items-center gap-1.5 font-medium">
-        <CategoryGlyph category={category} selected={selected} />
-        <span className="truncate">{category.name}</span>
-      </span>
+      <span className="truncate font-medium">{category.name}</span>
       {line && (
-        <span className={`truncate text-caption tabular ${selected ? 'text-primary-fg/80' : statusText[lineStatus(line)]}`}>{leftLabel(line, currency)}</span>
+        <span className={`truncate text-caption tabular ${selected ? 'text-primary-fg/80' : leftTone(line)}`}>{leftLabel(line, currency)}</span>
       )}
     </button>
   );
@@ -593,7 +633,7 @@ function CategoryOption({
     >
       <CategoryTile category={category} size="sm" />
       <span className="min-w-0 flex-1 truncate">{category.name}</span>
-      {line && <span className={`shrink-0 text-label tabular ${statusText[lineStatus(line)]}`}>{leftLabel(line, currency)}</span>}
+      {line && <span className={`shrink-0 text-label tabular ${leftTone(line)}`}>{leftLabel(line, currency)}</span>}
       {selected && <Check className="size-4 shrink-0 text-accent" />}
     </button>
   );

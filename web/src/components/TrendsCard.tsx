@@ -4,7 +4,7 @@ import { formatMoney, type TrendsDTO } from '@ffos/shared';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { monthLabel } from '../lib/format.ts';
-import { Card, StatRow } from './ui.tsx';
+import { Card } from './ui.tsx';
 
 const MONTHS = 6;
 
@@ -46,28 +46,7 @@ export function TrendsCard({ month, onSelect }: { month: string; onSelect: (mont
         </div>
       </div>
 
-      {/* Readout for the hovered (or selected) month. */}
-      <div className="mt-2" aria-live="polite">
-        <p className="text-label font-semibold">{monthLabel(focus.month)}</p>
-        <StatRow
-          className="mt-1.5 text-label"
-          items={[
-            { label: 'Income', value: money(focus.income) },
-            { label: 'Expenses', value: money(focus.expense) },
-            {
-              label: 'Net',
-              value: (
-                <span className={net < 0 ? 'text-negative' : ''}>
-                  {net < 0 ? '−' : '+'}
-                  {money(Math.abs(net))}
-                </span>
-              ),
-            },
-          ]}
-        />
-      </div>
-
-      <div className="mt-3 flex h-32 items-stretch gap-1 border-b border-line" onMouseLeave={() => setHovered(null)}>
+      <div className="mt-3 flex h-24 items-stretch gap-1 border-b border-line" onMouseLeave={() => setHovered(null)}>
         {data.map((m) => {
           const selected = m.month === month;
           return (
@@ -97,23 +76,36 @@ export function TrendsCard({ month, onSelect }: { month: string; onSelect: (mont
         ))}
       </div>
 
-      {avgSpend > 0 && (
-        <p className="mt-3 text-label text-muted tabular">
-          Average spending {money(avgSpend)} a month
-          {focus.expense > 0 && focus.month === month && (
+      {/* Hovering a month (desktop) shows its figures; otherwise the average puts this month in context. */}
+      <p className="mt-3 min-h-5 text-label text-muted tabular" aria-live="polite">
+        {hovered ? (
+          <>
+            <span className="font-semibold text-ink">{monthLabel(focus.month)}</span> · In {money(focus.income)} · Spent {money(focus.expense)} ·{' '}
+            <span className={net < 0 ? 'text-negative' : ''}>
+              {net < 0 ? '−' : '+'}
+              {money(Math.abs(net))}
+            </span>
+          </>
+        ) : (
+          avgSpend > 0 && (
             <>
-              {' · '}
-              {monthLabel(month).split(' ')[0]} is{' '}
-              {focus.expense > avgSpend
-                ? `${money(focus.expense - avgSpend)} above`
-                : focus.expense < avgSpend
-                  ? `${money(avgSpend - focus.expense)} below`
-                  : 'right on'}{' '}
-              average
+              Average spending {money(avgSpend)} a month
+              {focus.expense > 0 && (
+                <>
+                  {' · '}
+                  {monthLabel(month).split(' ')[0]} is{' '}
+                  {focus.expense > avgSpend
+                    ? `${money(focus.expense - avgSpend)} above`
+                    : focus.expense < avgSpend
+                      ? `${money(avgSpend - focus.expense)} below`
+                      : 'right on'}{' '}
+                  average
+                </>
+              )}
             </>
-          )}
-        </p>
-      )}
+          )
+        )}
+      </p>
     </Card>
   );
 }

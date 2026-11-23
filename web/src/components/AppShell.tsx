@@ -1,11 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, House, List, PiggyBank, Plus, Settings, Users } from 'lucide-react';
-import { createContext, useContext, useState, type ReactNode } from 'react';
-import { NavLink, Outlet, useMatch } from 'react-router';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { NavLink, Outlet, useMatch, useSearchParams } from 'react-router';
 import { formatMoney, type BookDTO, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { dayLabel, monthLabel, shiftMonth } from '../lib/format.ts';
+import { currentMonth, dayLabel, monthLabel, shiftMonth, todayISO } from '../lib/format.ts';
 import { Logo } from './auth-ui.tsx';
 import { CategoryTile } from './CategoryIcon.tsx';
 import { OutboxSync } from './OutboxSync.tsx';
@@ -13,8 +14,34 @@ import { TransactionSheet } from './TransactionSheet.tsx';
 import { Button, ErrorBanner, Field, fieldErrors, RoleBadge, Sheet } from './ui.tsx';
 
 // ── transaction sheet is app-wide so the Add button works from any tab ──
-const TxnSheetContext = createContext<(t?: TransactionDTO) => void>(() => undefined);
+/** Starting values for a new entry, e.g. the budget head it was added from. */
+export interface TransactionPrefill {
+  categoryId?: string;
+}
+const TxnSheetContext = createContext<(t?: TransactionDTO, prefill?: TransactionPrefill) => void>(() => undefined);
 export const useOpenTransaction = () => useContext(TxnSheetContext);
+
+// The month the current page is showing, so a new entry lands in that month rather than always today.
+const ViewedMonthContext = createContext<(month: string | null) => void>(() => undefined);
+export function useViewedMonth(month: string | null) {
+  const setViewedMonth = useContext(ViewedMonthContext);
+  useEffect(() => {
+    setViewedMonth(month);
+    return () => setViewedMonth(null);
+  }, [month, setViewedMonth]);
+}
+
+/** Today in this month; otherwise the last day of a past month or the first day of a future one. */
+function defaultDate(month: string | null): string {
+  const now = currentMonth();
+  if (!month || month === now) return todayISO();
+  if (month > now) return `${month}-01`;
+  const [y, m] = month.split('-').map(Number) as [number, number];
+  return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+}
+
+// Spot in the phone header where a tab page puts its control (the month switcher), so title and month share one row.
+const HeaderSlotContext = createContext<HTMLElement | null>(null);
 
 // Phone tab bar: 2 tabs · Add · 2 tabs. Members lives in Settings on phones and in the sidebar on desktop.
 const NAV = [
@@ -28,9 +55,32 @@ const SIDEBAR_NAV = [...NAV.slice(0, 3), { to: '/members', label: 'Members', ico
 export function AppShell() {
   const { book, can } = useCurrentBook();
   const [booksOpen, setBooksOpen] = useState(false);
-  const [sheet, setSheet] = useState<{ open: boolean; txn: TransactionDTO | null }>({ open: false, txn: null });
-  const openTransaction = (txn?: TransactionDTO) => setSheet({ open: true, txn: txn ?? null });
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  const [viewedMonth, setViewedMonth] = useState<string | null>(null);
+  const [sheet, setSheet] = useState<{ open: boolean; txn: TransactionDTO | null; prefill: { categoryId?: string; date: string } }>({
+    open: false,
+    txn: null,
+    prefill: { date: todayISO() },
+  });
+  const openTransaction = (txn?: TransactionDTO, prefill?: TransactionPrefill) =>
+    setSheet({ open: true, txn: txn ?? null, prefill: { ...prefill, date: defaultDate(viewedMonth) } });
   const canAdd = can('txn.create');
+
+  // The installed app's "Add expense" shortcut opens with ?add=expense: go straight to the keypad.
+  const [params, setParams] = useSearchParams();
+  const addParam = params.get('add');
+  useEffect(() => {
+    if (addParam === null) return;
+    if (canAdd) openTransaction();
+    setParams(
+      (p) => {
+        const next = new URLSearchParams(p);
+        next.delete('add');
+        return next;
+      },
+      { replace: true },
+    );
+  }, [addParam]);
   // The plan editor has its own bottom bar for the total and Save.
   const hideTabBar = useMatch('/budget/:month/edit') !== null;
 
@@ -48,6 +98,8 @@ export function AppShell() {
 
   return (
     <TxnSheetContext.Provider value={openTransaction}>
+      <ViewedMonthContext.Provider value={setViewedMonth}>
+      <HeaderSlotContext.Provider value={headerSlot}>
       <div className="min-h-dvh lg:flex">
         {/* desktop sidebar */}
         <aside className="sticky top-0 hidden h-dvh w-60 shrink-0 flex-col border-r border-line bg-surface px-3 py-4 lg:flex">
@@ -83,15 +135,12 @@ export function AppShell() {
           <header className="sticky top-0 z-30 border-b border-line bg-surface pt-safe lg:hidden">
             <div className="mx-auto flex h-14 max-w-2xl items-center gap-2 px-2">
               {bookSwitcher}
-              {book.role !== 'owner' && (
-                <span className="ml-auto pr-2">
-                  <RoleBadge role={book.role} />
-                </span>
-              )}
+              {book.role !== 'owner' && <RoleBadge role={book.role} />}
+              <div ref={setHeaderSlot} className="ml-auto flex shrink-0 items-center pr-1 empty:hidden" />
             </div>
           </header>
 
-          <main className="mx-auto max-w-2xl px-4 pt-5 pb-28 lg:max-w-3xl lg:px-8 lg:pt-8 lg:pb-12">
+          <main className="mx-auto max-w-2xl px-4 pt-4 pb-28 lg:max-w-3xl lg:px-8 lg:pt-8 lg:pb-12">
             <OutboxSync />
             <Outlet />
           </main>
@@ -122,7 +171,14 @@ export function AppShell() {
       </div>
 
       <BooksSheet open={booksOpen} onClose={() => setBooksOpen(false)} />
-      <TransactionSheet open={sheet.open} transaction={sheet.txn} onClose={() => setSheet((s) => ({ ...s, open: false }))} />
+      <TransactionSheet
+        open={sheet.open}
+        transaction={sheet.txn}
+        prefill={sheet.prefill}
+        onClose={() => setSheet((s) => ({ ...s, open: false }))}
+      />
+      </HeaderSlotContext.Provider>
+      </ViewedMonthContext.Provider>
     </TxnSheetContext.Provider>
   );
 }
@@ -270,7 +326,7 @@ export function TransactionRow({
     .filter(Boolean)
     .join(' · ');
   return (
-    <button onClick={() => open(txn)} className="flex min-h-[60px] w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-subtle/60 active:bg-subtle">
+    <button onClick={() => open(txn)} className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left hover:bg-subtle/60 active:bg-subtle">
       <CategoryTile category={category} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body font-medium">{txn.note || category?.name || 'Transaction'}</span>
@@ -281,7 +337,24 @@ export function TransactionRow({
   );
 }
 
-export function PageTitle({ children, action, subtitle }: { children: ReactNode; action?: ReactNode; subtitle?: ReactNode }) {
+/**
+ * Page heading. `tab` marks a page reached from the tab bar: on phones its title is already shown by the
+ * highlighted tab, so it's only read to screen readers and `action` moves up into the header row.
+ */
+export function PageTitle({ children, action, subtitle, tab }: { children: ReactNode; action?: ReactNode; subtitle?: ReactNode; tab?: boolean }) {
+  const slot = useContext(HeaderSlotContext);
+  if (tab) {
+    return (
+      <>
+        <h1 className="sr-only lg:hidden">{children}</h1>
+        {slot && action && createPortal(<div className="lg:hidden">{action}</div>, slot)}
+        <div className="mb-5 hidden items-center justify-between gap-3 lg:flex">
+          <h1 className="text-title font-semibold tracking-tight">{children}</h1>
+          {action}
+        </div>
+      </>
+    );
+  }
   return (
     <div className="mb-5 flex items-center justify-between gap-3">
       <div className="min-w-0">

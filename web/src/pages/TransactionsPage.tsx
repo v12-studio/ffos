@@ -3,7 +3,7 @@ import { ChevronDown, ReceiptText, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { formatMoney, type CategoryDTO, type TransactionDTO, type TransactionSearchDTO } from '@ffos/shared';
-import { MonthSwitcher, PageTitle, TransactionRow } from '../components/AppShell.tsx';
+import { MonthSwitcher, PageTitle, TransactionRow, useViewedMonth } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { Card, Chip, EmptyState, ErrorBanner, inputClass, PageSkeleton, Sheet } from '../components/ui.tsx';
@@ -37,6 +37,7 @@ export function TransactionsPage() {
   const month = params.get('month') ?? currentMonth();
   const categoryId = params.get('category');
   const scope: Scope = params.get('scope') === 'all' ? 'all' : 'month';
+  useViewedMonth(scope === 'month' ? month : null);
   const setParam = (key: string, value: string | null) =>
     setParams(
       (p) => {
@@ -50,6 +51,7 @@ export function TransactionsPage() {
 
   const [filter, setFilter] = useState<Filter>('all');
   const [search, setSearch] = useState('');
+  const [searching, setSearching] = useState(false);
   const [pickingCategory, setPickingCategory] = useState(false);
   const q = useDebounced(search.trim(), 300);
   const categories = useCategories(book.id);
@@ -110,24 +112,46 @@ export function TransactionsPage() {
   const narrowed = Boolean(search || filter !== 'all' || categoryId);
 
   return (
-    <div className="space-y-5">
-      <PageTitle action={scope === 'month' && <MonthSwitcher month={month} onChange={(m) => setParam('month', m === currentMonth() ? null : m)} />}>
+    <div className="space-y-4">
+      <PageTitle tab action={scope === 'month' && <MonthSwitcher month={month} onChange={(m) => setParam('month', m === currentMonth() ? null : m)} />}>
         Transactions
       </PageTitle>
 
-      <div className="relative">
-        <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={scope === 'all' ? 'Search every month: notes, categories, people' : 'Search notes, categories, people'}
-          className={`${inputClass} pl-10`}
-        />
-      </div>
+      {/* Search stays out of the way until asked for, so the list starts higher. */}
+      {(searching || search) && (
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
+          <input
+            type="search"
+            value={search}
+            autoFocus={!search}
+            onChange={(e) => setSearch(e.target.value)}
+            onBlur={() => !search && setSearching(false)}
+            placeholder={scope === 'all' ? 'Search every month: notes, categories, people' : 'Search notes, categories, people'}
+            className={`${inputClass} pr-10 pl-10`}
+          />
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => {
+              setSearch('');
+              setSearching(false);
+            }}
+            className="absolute top-1/2 right-1 grid size-9 -translate-y-1/2 place-items-center rounded-lg text-muted hover:text-ink"
+            aria-label="Close search"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
 
       {/* Fades at the edge so a chip cut off by the screen reads as "scroll for more". */}
       <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto pr-8 pl-4 [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] lg:mx-0 lg:px-0 lg:[mask-image:none]">
+        {!searching && !search && (
+          <Chip onClick={() => setSearching(true)} aria-label="Search" className="px-2.5">
+            <Search className="size-4" />
+          </Chip>
+        )}
         {chips.map(([value, label]) => (
           <Chip key={value} selected={filter === value} onClick={() => setFilter(filter === value ? 'all' : value)}>
             {label}
@@ -180,28 +204,31 @@ export function TransactionsPage() {
           </EmptyState>
         </Card>
       ) : (
-        groups.map(([key, groupRows]) => {
-          const net = netOf(groupRows);
-          return (
-            <section key={key}>
-              <div className="mb-2 flex justify-between px-0.5 text-label">
-                <span className="font-semibold text-muted">{scope === 'all' ? monthLabel(key) : dayLabel(key)}</span>
-                {/* With one entry this would just repeat its amount. */}
-                {groupRows.length > 1 && (
-                  <span className="text-muted tabular">
-                    {net < 0 ? '−' : '+'}
-                    {formatMoney(Math.abs(net), book.currency)}
-                  </span>
-                )}
-              </div>
-              <Card className="divide-y divide-line overflow-hidden">
-                {groupRows.map((t) => (
-                  <TransactionRow key={t.id} txn={t} category={byId.get(t.categoryId)} currency={book.currency} showDate={scope === 'all'} />
-                ))}
-              </Card>
-            </section>
-          );
-        })
+        // One list with day headings inside it, rather than a card per day.
+        <Card className="overflow-hidden">
+          {groups.map(([key, groupRows]) => {
+            const net = netOf(groupRows);
+            return (
+              <section key={key} className="group">
+                <div className="flex min-h-8 items-center justify-between border-y border-line bg-subtle/70 px-4 text-caption group-first:border-t-0">
+                  <span className="font-semibold text-muted">{scope === 'all' ? monthLabel(key) : dayLabel(key)}</span>
+                  {/* With one entry this would just repeat its amount. */}
+                  {groupRows.length > 1 && (
+                    <span className="text-muted tabular">
+                      {net < 0 ? '−' : '+'}
+                      {formatMoney(Math.abs(net), book.currency)}
+                    </span>
+                  )}
+                </div>
+                <div className="divide-y divide-line">
+                  {groupRows.map((t) => (
+                    <TransactionRow key={t.id} txn={t} category={byId.get(t.categoryId)} currency={book.currency} showDate={scope === 'all'} />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </Card>
       )}
 
       {scope === 'all' && allTxns.data?.truncated && (

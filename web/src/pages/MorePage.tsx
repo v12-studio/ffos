@@ -20,7 +20,7 @@ export function MorePage() {
   const close = () => setPanel(null);
   return (
     <div className="space-y-6">
-      <PageTitle>Settings</PageTitle>
+      <PageTitle tab>Settings</PageTitle>
       <section>
         <SectionTitle>Account</SectionTitle>
         <Card className="divide-y divide-line overflow-hidden">

@@ -141,7 +141,7 @@ function monogram(category?: Pick<CategoryDTO, 'icon' | 'name'>): string | null 
 }
 
 /** The category's colour, or one derived from its name when it still has the default grey and tag. */
-function tileColor(category?: CategoryDTO): string {
+export function tileColor(category?: CategoryDTO): string {
   if (!category) return DEFAULT_COLOR;
   return monogram(category) && category.color === DEFAULT_COLOR ? `hsl(${nameHue(category.name)} 45% 38%)` : category.color;
 }

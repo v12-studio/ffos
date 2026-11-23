@@ -1,10 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Plus, X } from 'lucide-react';
+import { ArrowLeft, Check, Plus, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { formatMoney, isCatchAllCategory, toMinor, type BudgetDTO, type CategoryDTO } from '@ffos/shared';
 import { PageTitle } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
+import { DragHandle, moveItem, SortableList } from '../components/Sortable.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, ErrorBanner, inputClass, PageSkeleton, SectionTitle, Sheet } from '../components/ui.tsx';
@@ -69,64 +70,91 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
   });
   const conflict = save.error instanceof ApiError && save.error.status === 409;
 
-  const addHead = (categoryId: string) => {
-    setRows((r) => (r.some((x) => x.categoryId === categoryId) ? r : [...r, { categoryId, amount: '' }]));
-    setFocusId(categoryId);
+  // New heads go to the end; the first one's amount is focused so typing can start straight away.
+  const addHeads = (ids: string[]) => {
+    const fresh = ids.filter((id) => !rows.some((r) => r.categoryId === id));
+    setRows((r) => [...r, ...fresh.map((categoryId) => ({ categoryId, amount: '' }))]);
+    setFocusId(fresh[0] ?? null);
     setAdding(false);
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <Link to={month === currentMonth() ? '/budget' : `/budget?month=${month}`} className="-ml-1 inline-flex min-h-9 items-center gap-1.5 rounded-lg px-1 text-label font-medium text-muted hover:text-ink">
         <ArrowLeft className="size-4" /> Budget
       </Link>
-      <PageTitle subtitle="Split the month's income into budget heads. Anything left over is saved.">Plan {monthLabel(month)}</PageTitle>
+      <PageTitle>Plan {monthLabel(month)}</PageTitle>
 
-      <section>
-        <SectionTitle>Income</SectionTitle>
-        <Card className="p-4">
-          <label htmlFor="income" className="mb-1.5 block text-label font-medium">
-            Expected income this month
-          </label>
+      <Card className="flex items-center gap-3 p-4">
+        <label htmlFor="income" className="min-w-0 flex-1 text-body font-medium">
+          Expected income
+        </label>
+        <div className="w-40 shrink-0">
           <AmountInput id="income" symbol={symbol} value={income} onChange={setIncome} invalid={incomeMinor === null} large />
-        </Card>
-      </section>
+        </div>
+      </Card>
 
       <section>
-        <SectionTitle>Budget heads</SectionTitle>
-        <Card className="divide-y divide-line">
-          {rows.length === 0 && <p className="px-4 py-5 text-center text-label text-muted">Add heads like Food, Bills or Medical and give each a limit.</p>}
-          {rows.map((row, i) => {
-            const cat = byId.get(row.categoryId);
-            return (
-              <div key={row.categoryId} className="flex items-center gap-3 px-4 py-2.5">
-                <label htmlFor={`head-${row.categoryId}`} className="min-w-0 flex-1 truncate text-body font-medium">
-                  {cat?.name ?? 'Unknown'}
-                </label>
-                <div className="w-28 shrink-0">
-                  <AmountInput
-                    id={`head-${row.categoryId}`}
-                    symbol={symbol}
-                    value={row.amount}
-                    invalid={rowMinor[i] === null}
-                    autoFocus={focusId === row.categoryId}
-                    onChange={(amount) => setRows((r) => r.map((x) => (x.categoryId === row.categoryId ? { ...x, amount } : x)))}
-                  />
-                </div>
-                <button
-                  onClick={() => setRows((r) => r.filter((x) => x.categoryId !== row.categoryId))}
-                  className="-mr-2 grid size-9 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle hover:text-ink"
-                  aria-label={`Remove ${cat?.name ?? 'head'}`}
-                >
-                  <X className="size-4" />
-                </button>
-              </div>
-            );
-          })}
-          <button onClick={() => setAdding(true)} className="flex min-h-12 w-full items-center justify-center gap-2 text-label font-medium text-accent hover:bg-subtle/60">
-            <Plus className="size-4" /> Add budget head
-          </button>
-        </Card>
+        <SectionTitle
+          action={
+            rows.length > 0 && (
+              <button onClick={() => setAdding(true)} className="flex min-h-6 items-center gap-1 text-label font-medium text-accent">
+                <Plus className="size-3.5" /> Add heads
+              </button>
+            )
+          }
+        >
+          Budget heads{rows.length > 0 && ` · ${rows.length}`}
+        </SectionTitle>
+        {rows.length === 0 ? (
+          <Card className="px-4 py-6 text-center">
+            <p className="text-label text-muted">Split the income into heads like Milk, Rent or School fees. Whatever isn't planned is saved.</p>
+            <Button className="mt-4" onClick={() => setAdding(true)}>
+              <Plus className="size-4" /> Add budget heads
+            </Button>
+          </Card>
+        ) : (
+          <>
+            <Card className="overflow-hidden">
+              <SortableList
+                className="divide-y divide-line"
+                items={rows}
+                keyOf={(r) => r.categoryId}
+                onMove={(from, to) => setRows((r) => moveItem(r, from, to))}
+                renderItem={(row, handle) => {
+                  const cat = byId.get(row.categoryId);
+                  const i = rows.indexOf(row);
+                  return (
+                    <div className="flex items-center gap-2 py-1.5 pr-2 pl-3">
+                      <DragHandle handle={handle} label={cat?.name ?? 'Head'} />
+                      <label htmlFor={`head-${row.categoryId}`} className="min-w-0 flex-1 truncate text-body font-medium">
+                        {cat?.name ?? 'Unknown'}
+                      </label>
+                      <div className="w-28 shrink-0">
+                        <AmountInput
+                          id={`head-${row.categoryId}`}
+                          symbol={symbol}
+                          value={row.amount}
+                          invalid={rowMinor[i] === null}
+                          autoFocus={focusId === row.categoryId}
+                          onChange={(amount) => setRows((r) => r.map((x) => (x.categoryId === row.categoryId ? { ...x, amount } : x)))}
+                        />
+                      </div>
+                      <button
+                        onClick={() => setRows((r) => r.filter((x) => x.categoryId !== row.categoryId))}
+                        className="grid size-9 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle hover:text-ink"
+                        aria-label={`Remove ${cat?.name ?? 'head'}`}
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </div>
+                  );
+                }}
+              />
+            </Card>
+            <p className="mt-2 px-0.5 text-caption text-muted">Hold ⠿ and drag to change the order. The Add screen lists heads in this order.</p>
+          </>
+        )}
       </section>
 
       {/* Running total stays visible while typing amounts. */}
@@ -154,7 +182,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
         </div>
       </div>
 
-      <AddHeadSheet open={adding} onClose={() => setAdding(false)} used={new Set(rows.map((r) => r.categoryId))} onPick={addHead} />
+      <AddHeadSheet open={adding} onClose={() => setAdding(false)} used={new Set(rows.map((r) => r.categoryId))} onAdd={addHeads} />
     </div>
   );
 }
@@ -194,89 +222,118 @@ function AmountInput({
   );
 }
 
+/** Pick several heads at once from a searchable checklist, or name a new one. */
 function AddHeadSheet({
   open,
   onClose,
   used,
-  onPick,
+  onAdd,
 }: {
   open: boolean;
   onClose: () => void;
   used: Set<string>;
-  onPick: (categoryId: string) => void;
+  onAdd: (categoryIds: string[]) => void;
 }) {
   const { book } = useCurrentBook();
   const queryClient = useQueryClient();
   const categories = useCategories(book.id);
-  const [name, setName] = useState('');
+  const [query, setQuery] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
   useEffect(() => {
-    if (open) setName('');
+    if (open) {
+      setQuery('');
+      setPicked([]);
+    }
   }, [open]);
 
   const available = useMemo(
     () =>
       (categories.data ?? [])
-        .filter((c) => c.kind === 'expense' && !used.has(c.id))
+        .filter((c) => c.kind === 'expense' && !c.archived && !used.has(c.id))
         .sort((a, b) => Number(isCatchAllCategory(a)) - Number(isCatchAllCategory(b))),
     [categories.data, used],
   );
+  const text = query.trim();
+  const shown = available.filter((c) => c.name.toLowerCase().includes(text.toLowerCase()));
+  const exactMatch = available.some((c) => c.name.toLowerCase() === text.toLowerCase()) || [...used].some((id) => categories.data?.find((c) => c.id === id)?.name.toLowerCase() === text.toLowerCase());
+  const toggle = (id: string) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
-  // Creates the head as an expense category (or reuses one with the same name).
+  // Creates the head as an expense category (or reuses one with the same name) and ticks it.
   const create = useMutation({
-    mutationFn: () => api.post<CategoryDTO>(`/books/${book.id}/categories`, { name: name.trim(), kind: 'expense' }),
+    mutationFn: () => api.post<CategoryDTO>(`/books/${book.id}/categories`, { name: text, kind: 'expense' }),
     onSuccess: (created) => {
       queryClient.setQueryData<CategoryDTO[]>(['book', book.id, 'categories'], (list = []) =>
         list.some((c) => c.id === created.id) ? list : [...list, created],
       );
-      onPick(created.id);
+      setPicked((p) => (p.includes(created.id) ? p : [...p, created.id]));
+      setQuery('');
     },
   });
 
   return (
-    <Sheet open={open} onClose={onClose} title="Add budget head">
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Add budget heads"
+      footer={
+        <Button className="w-full" disabled={picked.length === 0} onClick={() => onAdd(picked)}>
+          {picked.length === 0 ? 'Tick the heads to add' : `Add ${picked.length} head${picked.length === 1 ? '' : 's'}`}
+        </Button>
+      }
+    >
       <form
-        className="mb-5 space-y-2"
+        className="space-y-2"
         onSubmit={(e) => {
           e.preventDefault();
-          if (name.trim()) create.mutate();
+          if (text && !exactMatch) create.mutate();
         }}
       >
-        <label htmlFor="new-head" className="block text-label font-medium">
-          New head
-        </label>
-        <div className="flex gap-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-muted" />
           <input
-            id="new-head"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Fruits, Milk, School fees"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search, or type a new head"
+            aria-label="Search or name a new head"
             maxLength={40}
             autoComplete="off"
-            className={`${inputClass} min-w-0`}
+            className={`${inputClass} pl-10`}
           />
-          <Button type="submit" disabled={!name.trim()} loading={create.isPending}>
-            Add
-          </Button>
         </div>
+        {text && !exactMatch && (
+          <Button type="submit" variant="secondary" className="w-full" loading={create.isPending}>
+            <Plus className="size-4" /> Create “{text}”
+          </Button>
+        )}
         <ErrorBanner error={create.error} />
       </form>
 
-      {available.length > 0 && (
-        <>
-          <p className="mb-2 text-label font-medium">Or pick an existing category</p>
-          <div className="flex flex-wrap gap-2">
-            {available.map((c) => (
+      {shown.length > 0 ? (
+        <div className="mt-3 overflow-hidden rounded-xl border border-line">
+          {shown.map((c) => {
+            const on = picked.includes(c.id);
+            return (
               <button
                 key={c.id}
-                onClick={() => onPick(c.id)}
-                className="flex min-h-9 items-center gap-2 rounded-lg border border-line bg-surface px-2.5 text-label hover:bg-subtle"
+                type="button"
+                onClick={() => toggle(c.id)}
+                aria-pressed={on}
+                className="flex min-h-12 w-full items-center gap-3 border-b border-line px-3 text-left text-body last:border-b-0 hover:bg-subtle"
               >
                 <CategoryTile category={c} size="sm" />
-                {c.name}
+                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                <span
+                  className={`grid size-5 shrink-0 place-items-center rounded-md border ${on ? 'border-primary bg-primary text-primary-fg' : 'border-line'}`}
+                  aria-hidden
+                >
+                  {on && <Check className="size-3.5" strokeWidth={3} />}
+                </span>
               </button>
-            ))}
-          </div>
-        </>
+            );
+          })}
+        </div>
+      ) : (
+        !text && <p className="py-6 text-center text-label text-muted">Every category is already in the plan. Type a name to create a new head.</p>
       )}
     </Sheet>
   );

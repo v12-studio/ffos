@@ -29,6 +29,16 @@ export default defineConfig({
           { src: 'pwa-512.png', sizes: '512x512', type: 'image/png' },
           { src: 'pwa-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
+        // Long-press the installed app's icon (Android) → "Add expense" opens straight on the keypad.
+        // HashRouter, so the query lives after the #; AppShell opens the sheet when it sees ?add.
+        shortcuts: [
+          {
+            name: 'Add expense',
+            short_name: 'Add',
+            url: `${base}#/?add=expense`,
+            icons: [{ src: 'pwa-192.png', sizes: '192x192', type: 'image/png' }],
+          },
+        ],
       },
       workbox: {
         // Only the app shell is cached; API calls (another origin) always go to the network.
