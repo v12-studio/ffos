@@ -18,6 +18,16 @@ function shortDate(date: string): string {
   return `due ${new Date(y, m - 1, d).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 }
 
+/** Exported so the Overview can start this request alongside its own instead of after them. */
+export function useRecurringDue(bookId: string, month: string, enabled = true) {
+  return useQuery({
+    queryKey: ['book', bookId, 'recurring', 'due', month],
+    queryFn: () => api.get<RecurringDueDTO>(`/books/${bookId}/recurring/due?month=${month}`),
+    refetchInterval: 5 * 60_000,
+    enabled,
+  });
+}
+
 /** "3 monthly entries due. Add them?" on the Overview for the current month. */
 export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /** Already shown elsewhere, e.g. as bills on the budget. */ hideCategoryIds?: Set<string> }) {
   const { book, can } = useCurrentBook();
@@ -27,11 +37,7 @@ export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /*
   const byId = new Map((categories.data ?? []).map((c) => [c.id, c]));
   // Unticked entries; anything new starts ticked.
   const [unticked, setUnticked] = useState<Set<string>>(new Set());
-  const due = useQuery({
-    queryKey: ['book', book.id, 'recurring', 'due', month],
-    queryFn: () => api.get<RecurringDueDTO>(`/books/${book.id}/recurring/due?month=${month}`),
-    refetchInterval: 5 * 60_000,
-  });
+  const due = useRecurringDue(book.id, month);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['book', book.id] });
 
   const add = useMutation({

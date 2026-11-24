@@ -1,7 +1,16 @@
 import { createMiddleware } from 'hono/factory';
+import type { ObjectId } from 'mongodb';
 import { can, type Permission } from '@ffos/shared';
 import type { AppEnv } from '../context.ts';
+import type { Collections } from '../db.ts';
 import { forbidden, notFound, oid } from '../lib/errors.ts';
+
+export function loadBookAccess(db: Collections, bookId: ObjectId, userId: ObjectId) {
+  return Promise.all([
+    db.books.findOne({ _id: bookId, deletedAt: { $exists: false } }),
+    db.bookMembers.findOne({ bookId, userId }),
+  ]);
+}
 
 /**
  * Loads the book from `:bookId` and the caller's membership.
@@ -9,12 +18,13 @@ import { forbidden, notFound, oid } from '../lib/errors.ts';
  * The role is read from the DB on every request, so role changes apply immediately.
  */
 export const requireBook = createMiddleware<AppEnv>(async (c, next) => {
-  const bookId = oid(c.req.param('bookId'));
-  const db = c.get('db');
-  const [book, membership] = await Promise.all([
-    db.books.findOne({ _id: bookId, deletedAt: { $exists: false } }),
-    db.bookMembers.findOne({ bookId, userId: c.get('userId') }),
-  ]);
+  const rawId = c.req.param('bookId');
+  const bookId = oid(rawId);
+  // requireAuth usually started this lookup in parallel with its own; reuse it to save a round trip.
+  const early = c.get('bookAccess');
+  const [book, membership] = await (early && early.bookId === rawId
+    ? early.result
+    : loadBookAccess(c.get('db'), bookId, c.get('userId')));
   if (!book || !membership) throw notFound('Book not found');
   c.set('book', book);
   c.set('role', membership.role);

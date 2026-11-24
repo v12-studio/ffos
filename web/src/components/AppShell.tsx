@@ -1,17 +1,18 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, House, List, PiggyBank, Plus, Settings, Users } from 'lucide-react';
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, Suspense, useContext, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, Outlet, useMatch, useSearchParams } from 'react-router';
 import { formatMoney, type BookDTO, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { currentMonth, dayLabel, monthLabel, shiftMonth, todayISO } from '../lib/format.ts';
+import { preloadRoute, preloadTabsWhenIdle } from '../pages/lazy.ts';
 import { Logo } from './auth-ui.tsx';
 import { CategoryTile } from './CategoryIcon.tsx';
 import { OutboxSync } from './OutboxSync.tsx';
 import { TransactionSheet } from './TransactionSheet.tsx';
-import { Button, ErrorBanner, Field, fieldErrors, RoleBadge, Sheet } from './ui.tsx';
+import { Button, ErrorBanner, Field, fieldErrors, PageSkeleton, RoleBadge, Sheet } from './ui.tsx';
 
 // ── transaction sheet is app-wide so the Add button works from any tab ──
 /** Starting values for a new entry, e.g. the budget head it was added from. */
@@ -55,6 +56,14 @@ const NAV = [
 ];
 const SIDEBAR_NAV = [...NAV.slice(0, 3), { to: '/members', label: 'Members', icon: Users, end: false }, NAV[3]!];
 
+/** Start downloading a tab's code as soon as the pointer or focus lands on its link. */
+const preloadProps = (to: string) => {
+  const preload = preloadRoute[to];
+  if (!preload) return {};
+  const go = () => void preload().catch(() => undefined);
+  return { onPointerEnter: go, onTouchStart: go, onFocus: go };
+};
+
 export function AppShell() {
   const { book, can } = useCurrentBook();
   const [booksOpen, setBooksOpen] = useState(false);
@@ -84,6 +93,8 @@ export function AppShell() {
       { replace: true },
     );
   }, [addParam]);
+  useEffect(preloadTabsWhenIdle, []);
+
   // The plan editor has its own bottom bar for the total and Save.
   const hideTabBar = useMatch('/budget/:month/edit') !== null;
 
@@ -117,6 +128,7 @@ export function AppShell() {
                 key={to}
                 to={to}
                 end={end}
+                {...preloadProps(to)}
                 className={({ isActive }) =>
                   `flex min-h-9 items-center gap-2.5 rounded-lg px-2.5 text-label font-medium transition-colors ${
                     isActive ? 'bg-subtle text-ink' : 'text-muted hover:bg-subtle hover:text-ink'
@@ -145,7 +157,9 @@ export function AppShell() {
 
           <main className="mx-auto max-w-2xl px-4 pt-4 pb-28 lg:max-w-3xl lg:px-8 lg:pt-8 lg:pb-12">
             <OutboxSync />
-            <Outlet />
+            <Suspense fallback={<PageSkeleton />}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
 
@@ -191,6 +205,7 @@ function TabLink({ to, label, icon: Icon, end }: (typeof NAV)[number]) {
     <NavLink
       to={to}
       end={end}
+      {...preloadProps(to)}
       className={({ isActive }) =>
         `flex h-full flex-col items-center justify-center gap-1 text-micro font-medium ${isActive ? 'text-ink' : 'text-muted'}`
       }

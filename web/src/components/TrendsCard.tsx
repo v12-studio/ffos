@@ -8,6 +8,15 @@ import { Card } from './ui.tsx';
 
 const MONTHS = 6;
 
+/** Exported so the Overview can start this request alongside its own instead of after them. */
+export function useTrends(bookId: string, month: string) {
+  return useQuery({
+    queryKey: ['book', bookId, 'trends', month, MONTHS],
+    queryFn: () => api.get<TrendsDTO>(`/books/${bookId}/trends?end=${month}&months=${MONTHS}`),
+    placeholderData: (prev) => prev,
+  });
+}
+
 /**
  * Income vs expenses for the six months ending at `month`, as paired bars on one scale.
  * Hovering or focusing a month shows its numbers above the chart; tapping it opens that month.
@@ -15,11 +24,7 @@ const MONTHS = 6;
 export function TrendsCard({ month, onSelect }: { month: string; onSelect: (month: string) => void }) {
   const { book } = useCurrentBook();
   const [hovered, setHovered] = useState<string | null>(null);
-  const trends = useQuery({
-    queryKey: ['book', book.id, 'trends', month, MONTHS],
-    queryFn: () => api.get<TrendsDTO>(`/books/${book.id}/trends?end=${month}&months=${MONTHS}`),
-    placeholderData: (prev) => prev,
-  });
+  const trends = useTrends(book.id, month);
   const data = trends.data?.months;
   // One month of data has nothing to compare against.
   if (!data || data.filter((m) => m.income || m.expense).length < 2) return null;

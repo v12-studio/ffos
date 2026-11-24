@@ -6,8 +6,8 @@ import { formatMoney, type BudgetDTO, type BudgetLineDTO, type CategoryDTO, type
 import { MonthSwitcher, PageTitle, TransactionRow, useOpenTransaction, useViewedMonth } from '../components/AppShell.tsx';
 import { HeadRow, PayButton, SafeToSpend } from '../components/BudgetParts.tsx';
 import { tileColor } from '../components/CategoryIcon.tsx';
-import { RecurringDueCard } from '../components/RecurringDue.tsx';
-import { TrendsCard } from '../components/TrendsCard.tsx';
+import { RecurringDueCard, useRecurringDue } from '../components/RecurringDue.tsx';
+import { TrendsCard, useTrends } from '../components/TrendsCard.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, EmptyState, ErrorBanner, PageSkeleton, SectionTitle } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
@@ -28,6 +28,10 @@ export function HomePage() {
     refetchInterval: 60_000,
   });
   const budget = useBudget(book.id, month);
+  // The cards below only mount once summary and budget arrive; subscribing here sends their requests in
+  // the same round trip instead of one after another.
+  useTrends(book.id, month);
+  useRecurringDue(book.id, month, month === currentMonth());
   const byId = new Map((categories.data ?? []).map((c) => [c.id, c]));
   const s = summary.data;
   const b = budget.data;

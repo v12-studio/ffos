@@ -43,9 +43,22 @@ export default defineConfig({
       workbox: {
         // Only the app shell is cached; API calls (another origin) always go to the network.
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
+        // Inter ships a file per script; only Latin is needed up front (others still load on demand when online).
+        globIgnores: ['**/inter-{cyrillic,cyrillic-ext,greek,greek-ext,vietnamese}-*.woff2'],
         navigateFallback: 'index.html',
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Libraries change far less often than app code: a separate chunk stays cached across deploys.
+        manualChunks: (id) => {
+          if (/node_modules\/(react|react-dom|scheduler|react-router|@tanstack)\//.test(id)) return 'vendor';
+          if (id.includes('node_modules/lucide-react/')) return 'icons';
+        },
+      },
+    },
+  },
   server: { port: 5173 },
 });

@@ -1,21 +1,31 @@
 import { WifiOff } from 'lucide-react';
+import { Suspense, type ReactNode } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router';
 import { AppLockProvider } from './components/AppLock.tsx';
 import { AppShell } from './components/AppShell.tsx';
 import { Button, ErrorBanner, FullScreenSpinner } from './components/ui.tsx';
 import { useAuth } from './lib/auth.tsx';
 import { BookProvider, useBook } from './lib/book.tsx';
-import { LoginPage, RecoverPage, RecoveryCodesScreen, SetupPage } from './pages/AuthPages.tsx';
-import { BudgetEditPage } from './pages/BudgetEditPage.tsx';
-import { BudgetPage } from './pages/BudgetPage.tsx';
-import { CategoriesPage } from './pages/CategoriesPage.tsx';
-import { DeletedPage } from './pages/DeletedPage.tsx';
+// Overview is where the app opens, so it ships in the main bundle; every other screen loads on demand.
 import { HomePage } from './pages/HomePage.tsx';
-import { InvitePage } from './pages/InvitePage.tsx';
-import { MembersPage } from './pages/MembersPage.tsx';
-import { MorePage } from './pages/MorePage.tsx';
-import { RecurringPage } from './pages/RecurringPage.tsx';
-import { TransactionsPage } from './pages/TransactionsPage.tsx';
+import {
+  BudgetEditPage,
+  BudgetPage,
+  CategoriesPage,
+  DeletedPage,
+  InvitePage,
+  LoginPage,
+  MembersPage,
+  MorePage,
+  RecoverPage,
+  RecoveryCodesScreen,
+  RecurringPage,
+  SetupPage,
+  TransactionsPage,
+} from './pages/lazy.ts';
+
+/** Full-screen loading while a signed-out screen's code downloads. */
+const Lazy = ({ children }: { children: ReactNode }) => <Suspense fallback={<FullScreenSpinner />}>{children}</Suspense>;
 
 export function App() {
   const { status, recoveryCodes, dismissRecoveryCodes, retry } = useAuth();
@@ -36,29 +46,37 @@ export function App() {
   if (status === 'setup') {
     return (
       <Routes>
-        <Route path="*" element={<SetupPage />} />
+        <Route path="*" element={<Lazy><SetupPage /></Lazy>} />
       </Routes>
     );
   }
 
   if (status === 'signedOut') {
     return (
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/recover" element={<RecoverPage />} />
-        <Route path="/invite/:token" element={<InvitePage />} />
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
+      <Lazy>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/recover" element={<RecoverPage />} />
+          <Route path="/invite/:token" element={<InvitePage />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </Lazy>
     );
   }
 
-  if (recoveryCodes) return <RecoveryCodesScreen codes={recoveryCodes} onDone={dismissRecoveryCodes} />;
+  if (recoveryCodes) {
+    return (
+      <Lazy>
+        <RecoveryCodesScreen codes={recoveryCodes} onDone={dismissRecoveryCodes} />
+      </Lazy>
+    );
+  }
 
   return (
     <AppLockProvider>
       <BookProvider>
         <Routes>
-          <Route path="/invite/:token" element={<InvitePage />} />
+          <Route path="/invite/:token" element={<Lazy><InvitePage /></Lazy>} />
           <Route element={<BookGate />}>
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />

@@ -164,6 +164,8 @@ export interface BudgetDoc {
 interface MetaDoc {
   _id: string;
   at: Date;
+  /** On the 'indexes' doc: which INDEX_VERSION was last applied. */
+  version?: number;
 }
 
 // ── connection (cached across warm serverless invocations) ──
@@ -212,7 +214,22 @@ export async function collections() {
 
 export type Collections = Awaited<ReturnType<typeof collections>>;
 
+// Bump whenever the index list below changes, so the next cold start applies it.
+const INDEX_VERSION = 1;
+
+/**
+ * Creating ~25 indexes costs several round trips, and every serverless cold start would pay it before
+ * answering. Instead one read checks a marker, and the indexes are only (re)applied when it's out of date.
+ */
 async function ensureIndexes(db: Db) {
+  const meta = db.collection<MetaDoc>('meta');
+  const marker = await meta.findOne({ _id: 'indexes' }, { projection: { version: 1 } });
+  if (marker?.version === INDEX_VERSION) return;
+  await createIndexes(db);
+  await meta.updateOne({ _id: 'indexes' }, { $set: { version: INDEX_VERSION, at: new Date() } }, { upsert: true });
+}
+
+async function createIndexes(db: Db) {
   const ops: Promise<unknown>[] = [
     db.collection('users').createIndex({ phone: 1 }, { unique: true }),
     db.collection('users').createIndex(

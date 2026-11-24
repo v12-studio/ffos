@@ -33,6 +33,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         if (hasStoredSession()) {
+          const cached = loadSnapshot<UserDTO>('me');
+          if (cached) {
+            // Returning user: open now with the last-known profile. The session renews in the background,
+            // and each screen's requests wait for that renewal on their own (see api.ts), so nothing
+            // waits on /me. A rejected session signs out via onSessionEnded.
+            setUser(cached);
+            setStatus('signedIn');
+            api
+              .get<UserDTO>('/me')
+              .then((me) => {
+                saveSnapshot('me', me);
+                if (!cancelled) setUser(me);
+              })
+              .catch(() => undefined); // offline: keep the cached profile
+            return;
+          }
           const ok = await refreshSession();
           if (ok) {
             const me = await api.get<UserDTO>('/me');
@@ -44,13 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
           // Still holding a token means the refresh failed for network reasons, not rejection.
-          // Open with the last-known profile so entries can still be recorded offline.
           if (hasStoredSession()) {
-            const cached = loadSnapshot<UserDTO>('me');
-            if (!cancelled) {
-              if (cached) setUser(cached);
-              setStatus(cached ? 'signedIn' : 'offline');
-            }
+            if (!cancelled) setStatus('offline');
             return;
           }
         }
