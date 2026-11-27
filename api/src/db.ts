@@ -44,6 +44,8 @@ export interface BookDoc extends Timestamps {
   color: string;
   ownerId: ObjectId;
   isPersonal: boolean;
+  /** Order of the budget's sections; unset means the default (bills, spending, savings). */
+  groupOrder?: HeadGroup[];
   deletedAt?: Date;
 }
 

@@ -15,7 +15,7 @@ import {
 import { api, ApiError } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { leftLabel, lineStatus, statusText, useBudget } from '../lib/budget.ts';
+import { leftLabel, lineStatus, sortByGroup, statusText, useBudget, useGroupOrder } from '../lib/budget.ts';
 import { currentMonth, monthLabel, todayISO } from '../lib/format.ts';
 import { enqueue, isNetworkError, newClientId } from '../lib/offline.ts';
 import { recentCategoryIds, rememberCategory } from '../lib/recent.ts';
@@ -209,8 +209,10 @@ export function TransactionSheet({
   // recently, then the rest in the book's order, "Other" last.
   // A person's own allowance heads come first for them.
   const isMine = (id: string) => categories.data?.find((c) => c.id === id)?.memberId === user?.id;
+  // Plan order is section by section, in the book's section order.
+  const groupOrder = useGroupOrder();
   const headOrder = new Map(
-    (budget.data?.lines ?? []).map((l, i) => [l.categoryId, (isMine(l.categoryId) ? -500 : 0) + i]),
+    sortByGroup(budget.data?.lines ?? [], groupOrder).map((l, i) => [l.categoryId, (isMine(l.categoryId) ? -500 : 0) + i]),
   );
   const rank = (c: CategoryDTO) => {
     if (headOrder.has(c.id)) return headOrder.get(c.id)!;

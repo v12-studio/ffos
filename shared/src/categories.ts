@@ -24,6 +24,15 @@ const BILL_WORDS =
   /\b(rent|emi|emis|loan|loans|bill|bills|electricity|eb|water|gas|cylinder|internet|wifi|broadband|recharge|insurance|premium|lic|fees?|tuition|school|subscriptions?|netflix|maintenance|credit card)\b/i;
 const SAVINGS_WORDS = /\b(seetu|chit|chits|sip|sips|savings?|post office|rd|fd|ppf|nps|mutual funds?|investments?|gold scheme|emergency fund)\b/i;
 
+/**
+ * The order the Budget tab lists its sections in. Each book can choose its own; this is the default.
+ * Anything missing or unknown in a saved order is repaired, so the result always has every group once.
+ */
+export function normalizeGroupOrder(order?: readonly string[] | null): HeadGroup[] {
+  const known = (order ?? []).filter((g, i, all): g is HeadGroup => (HEAD_GROUPS as readonly string[]).includes(g) && all.indexOf(g) === i);
+  return [...known, ...HEAD_GROUPS.filter((g) => !known.includes(g))];
+}
+
 /** A best guess from the name, used until someone picks a group for the category. */
 export function guessHeadGroup(name: string): HeadGroup {
   if (SAVINGS_WORDS.test(name)) return 'savings';

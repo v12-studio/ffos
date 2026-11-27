@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { formatMoney, HEAD_GROUP_LABELS, isCatchAllCategory, toMinor, type BudgetDTO, type CategoryDTO, type HeadGroup } from '@ffos/shared';
 import { PageTitle } from '../components/AppShell.tsx';
-import { groupOrder, HeadSettingsSheet, monthShort } from '../components/BudgetParts.tsx';
+import { HeadSettingsSheet, monthShort } from '../components/BudgetParts.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
 import { DragHandle, moveItem, SortableList } from '../components/Sortable.tsx';
 import { useToast } from '../components/Toast.tsx';
@@ -12,7 +12,7 @@ import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, ErrorBanner, inputClass, PageSkeleton, SectionTitle, Sheet } from '../components/ui.tsx';
 import { api, ApiError } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { useBudget, useBudgetSuggestions, useSavePlan } from '../lib/budget.ts';
+import { useBudget, useBudgetSuggestions, useGroupOrder, useSavePlan } from '../lib/budget.ts';
 import { currencySymbol, currentMonth, minorToInput, monthLabel } from '../lib/format.ts';
 
 interface Row {
@@ -51,6 +51,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
   const suggestions = useBudgetSuggestions(book.id, month);
   const suggestionFor = new Map((suggestions.data?.byCategory ?? []).map((x) => [x.categoryId, x]));
   const groupOf = (id: string): HeadGroup => byId.get(id)?.group ?? 'spending';
+  const groupOrder = useGroupOrder();
 
   const incomeMinor = toMinor(income || '0');
   const rowMinor = new Map(rows.map((r) => [r.categoryId, toMinor(r.amount || '0')]));
@@ -60,7 +61,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
   const unassigned = (incomeMinor ?? 0) - allocated;
   const willSave = (incomeMinor ?? 0) - total('bills') - total('spending');
   const money = (n: number) => formatMoney(n, book.currency);
-  // Heads are kept in group order (bills, spending, savings); the order within a group is the family's.
+  // Heads are kept in section order (the book's choice); the order within a section is the family's.
   const ordered = groupOrder.flatMap((g) => rows.filter((r) => groupOf(r.categoryId) === g));
 
   const save = useSavePlan(book.id, month);
@@ -227,7 +228,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
             </Button>
           </div>
           <p className="px-0.5 text-caption text-muted">
-            Tap a head's name to make it a bill, spending or savings head, set a goal, or make it someone's allowance. Hold ⠿ and drag to reorder.
+            Tap a head's name to make it a bill, spending or savings head, set a goal, or make it someone's allowance. Hold ⠿ and drag to reorder. To change the order of the sections, use Arrange on the Budget tab.
           </p>
         </>
       )}

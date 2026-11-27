@@ -5,7 +5,6 @@ import { Link } from 'react-router';
 import {
   formatMoney,
   HEAD_GROUP_LABELS,
-  HEAD_GROUPS,
   toMinor,
   type BudgetDTO,
   type BudgetLineDTO,
@@ -24,6 +23,7 @@ import {
   statusBar,
   statusText,
   useMembers,
+  useGroupOrder,
   usePayBill,
   useSavePlan,
   useUpdateHead,
@@ -492,6 +492,7 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
   const categories = useCategories(book.id);
   const members = useMembers(book.id, categoryId !== null && book.memberCount > 1);
   const update = useUpdateHead(book.id);
+  const groupOrder = useGroupOrder();
   const category = categories.data?.find((c) => c.id === categoryId);
   const [group, setGroup] = useState<HeadGroup>('spending');
   const [memberId, setMemberId] = useState('');
@@ -552,7 +553,7 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
       <div className="space-y-5">
         <div>
           <p className="mb-1.5 text-label font-medium">What kind of head is {category.name}?</p>
-          <Segmented value={group} onChange={setGroup} options={HEAD_GROUPS.map((g) => ({ value: g, label: HEAD_GROUP_LABELS[g].name }))} />
+          <Segmented value={group} onChange={setGroup} options={groupOrder.map((g) => ({ value: g, label: HEAD_GROUP_LABELS[g].name }))} />
           <p className="mt-1.5 text-caption text-muted">{HEAD_GROUP_LABELS[group].description}</p>
         </div>
 
@@ -645,4 +646,3 @@ export function SafeToSpend({ budget, currency }: { budget: BudgetDTO; currency:
   );
 }
 
-export const groupOrder: HeadGroup[] = ['bills', 'spending', 'savings'];

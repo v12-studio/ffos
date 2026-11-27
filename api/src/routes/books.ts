@@ -22,6 +22,7 @@ import { randomToken, sha256 } from '../lib/tokens.ts';
 import { requireAuth } from '../middleware/auth.ts';
 import { requireBook, requirePermission } from '../middleware/book.ts';
 import { budgetRoutes } from './budget.ts';
+import { exportRoutes } from './export.ts';
 import { ledgerRoutes } from './ledger.ts';
 import { recurringRoutes } from './recurring.ts';
 
@@ -263,7 +264,8 @@ const bookRoutes = new Hono<AppEnv>()
 
   .route('/', ledgerRoutes)
   .route('/', budgetRoutes)
-  .route('/', recurringRoutes);
+  .route('/', recurringRoutes)
+  .route('/', exportRoutes);
 
 function toInviteDTO(invite: InviteDoc, createdByName: string): InviteDTO {
   return {

@@ -29,6 +29,8 @@ export interface BookDTO {
   role: Role;
   permissions: Permission[];
   memberCount: number;
+  /** The order budget sections (bills, spending, savings) are listed in; chosen by whoever plans the budget. */
+  groupOrder: HeadGroup[];
 }
 
 export interface MemberDTO {

@@ -1,17 +1,18 @@
-import { useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowUpDown, History, Pencil, PiggyBank } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, ArrowUpDown, Download, History, Pencil, PiggyBank } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { formatMoney, HEAD_GROUP_LABELS, type BudgetDTO, type BudgetLineDTO, type CategoryDTO, type HeadGroup } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, useViewedMonth } from '../components/AppShell.tsx';
-import { groupOrder, HeadRow, HeadSettingsSheet, HeadSheet, MoveMoneySheet, PayButton } from '../components/BudgetParts.tsx';
+import { HeadRow, HeadSettingsSheet, HeadSheet, MoveMoneySheet, PayButton } from '../components/BudgetParts.tsx';
+import { ExportSheet } from '../components/ExportSheet.tsx';
 import { DragHandle, moveItem, SortableList } from '../components/Sortable.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, EmptyState, ErrorBanner, PageSkeleton, SectionTitle, StatRow } from '../components/ui.tsx';
 import { ApiError } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { lineStatus, needsAttention, useBudget, useMembers, useSavePlan } from '../lib/budget.ts';
+import { lineStatus, needsAttention, sortByGroup, useBudget, useGroupOrder, useMembers, useSaveGroupOrder, useSavePlan, useUpdateHead } from '../lib/budget.ts';
 import { currentMonth, monthLabel } from '../lib/format.ts';
 
 export function BudgetPage() {
@@ -29,8 +30,11 @@ export function BudgetPage() {
   const [moving, setMoving] = useState<string | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [arranging, setArranging] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const groupOrder = useGroupOrder();
   const b = budget.data;
   const canPlan = can('budget.manage');
+  const canExport = can('book.export');
 
   // Other screens link here to open a head (?head=) or to cover an overspend (?cover=).
   const headParam = params.get('head');
@@ -54,7 +58,7 @@ export function BudgetPage() {
   // A finished month can't be fixed, only learned from: just the heads that went over.
   const finished = month < currentMonth();
   const flagged = (l: BudgetLineDTO) => (finished ? lineStatus(l) === 'over' : needsAttention(l, today));
-  const attention = (b?.lines ?? []).filter(flagged);
+  const attention = sortByGroup((b?.lines ?? []).filter(flagged), groupOrder);
   const rest = (b?.lines ?? []).filter((l) => !flagged(l));
   const rows = (lines: BudgetLineDTO[], withPay = false) => (
     <Card className="divide-y divide-line overflow-hidden">
@@ -89,16 +93,23 @@ export function BudgetPage() {
           {b.carriedFrom && canPlan && <CarriedBanner budget={b} month={month} />}
           {month < currentMonth() ? <MonthReview budget={b} byId={byId} currency={book.currency} month={month} /> : <PlanSummary budget={b} currency={book.currency} />}
 
-          {canPlan && (
+          {(canPlan || canExport) && !arranging && (
             <div className="flex justify-end gap-1">
-              {b.lines.length > 1 && !arranging && (
+              {canExport && (
+                <button onClick={() => setExporting(true)} className="flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-accent hover:bg-subtle">
+                  <Download className="size-3.5" /> Export
+                </button>
+              )}
+              {canPlan && b.lines.length > 0 && (
                 <button onClick={() => setArranging(true)} className="flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-accent hover:bg-subtle">
                   <ArrowUpDown className="size-3.5" /> Arrange
                 </button>
               )}
-              <Link to={`/budget/${month}/edit`} className="flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-accent hover:bg-subtle">
-                <Pencil className="size-3.5" /> Edit plan
-              </Link>
+              {canPlan && (
+                <Link to={`/budget/${month}/edit`} className="flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-accent hover:bg-subtle">
+                  <Pencil className="size-3.5" /> Edit plan
+                </Link>
+              )}
             </div>
           )}
 
@@ -187,6 +198,7 @@ export function BudgetPage() {
       />
       <MoveMoneySheet month={month} budget={b} categoryId={moving} onClose={() => setMoving(null)} />
       <HeadSettingsSheet categoryId={settingsFor} onClose={() => setSettingsFor(null)} />
+      <ExportSheet open={exporting} onClose={() => setExporting(false)} preset={{ what: 'budget', period: 'month', month }} />
     </div>
   );
 }
@@ -250,6 +262,7 @@ function PlanSummary({ budget: b, currency }: { budget: BudgetDTO; currency: str
   const lostToOverspend = t.plannedSavings - t.projectedSavings;
   const shortfall = t.projectedSavings < 0;
   const sum = (group: HeadGroup) => b.lines.filter((l) => l.group === group).reduce((s, l) => s + l.planned, 0);
+  const groupOrder = useGroupOrder();
 
   return (
     <Card className="p-4">
@@ -279,11 +292,11 @@ function PlanSummary({ budget: b, currency }: { budget: BudgetDTO; currency: str
 
       <StatRow
         className="mt-4 border-t border-line pt-3"
-        items={[
-          { label: 'Bills', value: money(sum('bills')) },
-          { label: 'Spending', value: money(sum('spending')) },
-          { label: 'Savings', value: money(sum('savings') + Math.max(0, t.unallocated)) },
-        ]}
+        items={groupOrder.map((g) => ({
+          label: HEAD_GROUP_LABELS[g].name,
+          // Income not given to any head is saved too.
+          value: money(sum(g) + (g === 'savings' ? Math.max(0, t.unallocated) : 0)),
+        }))}
       />
       <p className="mt-2 text-caption text-muted tabular">
         {t.unallocated > 0 && `Savings includes ${money(t.unallocated)} not given to any head. `}
@@ -343,43 +356,157 @@ function MonthReview({ budget: b, byId, currency, month }: { budget: BudgetDTO; 
   );
 }
 
-/** Drag heads into the order the family thinks of them; saved straight to this month's plan. */
+interface ArrangeItem {
+  categoryId: string;
+  group: HeadGroup;
+  planned: number;
+}
+
+/**
+ * Put the sections (bills, spending, savings) in the order the family thinks of them, move a head to
+ * another section, and drag heads within a section. Section order is the book's, for every month;
+ * a head's section is its own, for every month; the order of heads is saved to this month's plan.
+ */
 function ArrangeHeads({ budget: b, month, byId, onDone }: { budget: BudgetDTO; month: string; byId: Map<string, CategoryDTO>; onDone: () => void }) {
   const { book } = useCurrentBook();
   const queryClient = useQueryClient();
   const toast = useToast();
-  const [order, setOrder] = useState(b.lines);
-  const changed = order.some((l, i) => l.categoryId !== b.lines[i]?.categoryId);
-  const save = useSavePlan(book.id, month);
+  const savedSections = useGroupOrder();
+  const [sections, setSections] = useState(savedSections);
+  const [items, setItems] = useState<ArrangeItem[]>(() =>
+    sortByGroup(b.lines, savedSections).map((l) => ({ categoryId: l.categoryId, group: l.group, planned: l.planned })),
+  );
+  const savePlan = useSavePlan(book.id, month);
+  const saveSections = useSaveGroupOrder(book.id);
+  const updateHead = useUpdateHead(book.id);
+
+  const nameOf = (id: string) => byId.get(id)?.name ?? 'Unknown';
+  const lineGroup = new Map(b.lines.map((l) => [l.categoryId, l.group]));
+  const moved = items.filter((i) => lineGroup.get(i.categoryId) !== i.group);
+  const sectionsChanged = sections.join() !== savedSections.join();
+  // The plan only needs saving when the heads wouldn't already show in this order without it.
+  const newGroup = new Map(items.map((i) => [i.categoryId, i.group]));
+  const wanted = sortByGroup(items, sections).map((i) => i.categoryId);
+  const asIs = sortByGroup(
+    b.lines.map((l) => ({ categoryId: l.categoryId, group: newGroup.get(l.categoryId) ?? l.group })),
+    sections,
+  ).map((l) => l.categoryId);
+  const orderChanged = wanted.join() !== asIs.join();
+  const changed = moved.length > 0 || sectionsChanged || orderChanged;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      for (const item of moved) await updateHead.mutateAsync({ id: item.categoryId, group: item.group });
+      if (sectionsChanged) await saveSections.mutateAsync(sections);
+      if (orderChanged) {
+        const ordered = sortByGroup(items, sections);
+        await savePlan.mutateAsync({ budget: b, lines: ordered.map((i) => ({ categoryId: i.categoryId, planned: i.planned })) });
+      }
+    },
+    onSuccess: () => {
+      toast({ message: 'Order saved', duration: 2000 });
+      onDone();
+    },
+  });
   const conflict = save.error instanceof ApiError && save.error.status === 409;
 
+  // A head moved to another section goes to the end of it.
+  const moveTo = (id: string, group: HeadGroup) =>
+    setItems((all) => {
+      const item = all.find((i) => i.categoryId === id)!;
+      return [...all.filter((i) => i.categoryId !== id), { ...item, group }];
+    });
+
   return (
-    <section>
-      <SectionTitle>Arrange budget heads</SectionTitle>
-      <Card className="overflow-hidden">
-        <SortableList
-          className="divide-y divide-line"
-          items={order}
-          keyOf={(l) => l.categoryId}
-          onMove={(from, to) => setOrder((o) => moveItem(o, from, to))}
-          renderItem={(line, handle) => {
-            const name = byId.get(line.categoryId)?.name ?? 'Unknown';
-            return (
-              <div className="flex min-h-12 items-center gap-2 pr-4 pl-3">
-                <DragHandle handle={handle} label={name} />
-                <span className="min-w-0 flex-1 truncate text-body font-medium">{name}</span>
-                <span className="shrink-0 text-caption text-muted">{HEAD_GROUP_LABELS[line.group].name}</span>
-                <span className="w-20 shrink-0 text-right text-label text-muted tabular">{formatMoney(line.planned, book.currency)}</span>
-              </div>
-            );
-          }}
-        />
-      </Card>
-      <p className="mt-2 px-0.5 text-caption text-muted">Hold ⠿ and drag. Heads stay in their group here; the Add screen lists them in this order.</p>
-      <div className="mt-3 space-y-2">
+    <div className="space-y-5">
+      <section>
+        <SectionTitle>Section order</SectionTitle>
+        <Card className="overflow-hidden">
+          <SortableList
+            className="divide-y divide-line"
+            items={sections}
+            keyOf={(g) => g}
+            onMove={(from, to) => setSections((s) => moveItem(s, from, to))}
+            renderItem={(group, handle) => {
+              const count = items.filter((i) => i.group === group).length;
+              return (
+                <div className="flex min-h-12 items-center gap-2 pr-4 pl-3">
+                  <DragHandle handle={handle} label={`${HEAD_GROUP_LABELS[group].name} section`} />
+                  <span className="min-w-0 flex-1 truncate text-body font-medium">{HEAD_GROUP_LABELS[group].name}</span>
+                  <span className="shrink-0 text-caption text-muted">
+                    {count} head{count === 1 ? '' : 's'}
+                  </span>
+                </div>
+              );
+            }}
+          />
+        </Card>
+        <p className="mt-2 px-0.5 text-caption text-muted">The Budget tab, the plan and the Add screen list sections in this order, for everyone in the book.</p>
+      </section>
+
+      {sections.map((group) => {
+        const groupItems = items.filter((i) => i.group === group);
+        return (
+          <section key={group}>
+            <SectionTitle>{HEAD_GROUP_LABELS[group].name}</SectionTitle>
+            {groupItems.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-line px-4 py-3 text-label text-muted">No heads here. Pick this section beside a head to move it here.</p>
+            ) : (
+              <Card className="overflow-hidden">
+                <SortableList
+                  className="divide-y divide-line"
+                  items={groupItems}
+                  keyOf={(i) => i.categoryId}
+                  onMove={(from, to) => {
+                    const reordered = moveItem(groupItems, from, to);
+                    setItems((all) => [...all.filter((i) => i.group !== group), ...reordered]);
+                  }}
+                  renderItem={(item, handle) => {
+                    const name = nameOf(item.categoryId);
+                    return (
+                      <div className="flex min-h-12 items-center gap-2 pr-3 pl-3">
+                        <DragHandle handle={handle} label={name} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-body font-medium">{name}</span>
+                          <span className="block text-caption text-muted tabular">{formatMoney(item.planned, book.currency)}</span>
+                        </span>
+                        <select
+                          value={item.group}
+                          onChange={(e) => moveTo(item.categoryId, e.target.value as HeadGroup)}
+                          aria-label={`Section for ${name}`}
+                          className="min-h-9 shrink-0 rounded-lg border border-line bg-surface px-2 text-label text-ink outline-none focus:border-accent"
+                        >
+                          {sections.map((g) => (
+                            <option key={g} value={g}>
+                              {HEAD_GROUP_LABELS[g].name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    );
+                  }}
+                />
+              </Card>
+            )}
+          </section>
+        );
+      })}
+
+      <p className="px-0.5 text-caption text-muted">
+        Hold ⠿ and drag to reorder. Moving a head to another section changes how it's tracked in every month (a bill is paid once, spending is drawn
+        down, savings count as saved).
+      </p>
+      <div className="space-y-2">
         <ErrorBanner error={save.error} />
         {conflict && (
-          <Button variant="secondary" className="w-full" onClick={() => { queryClient.invalidateQueries({ queryKey: ['book', book.id, 'budget', month] }); onDone(); }}>
+          <Button
+            variant="secondary"
+            className="w-full"
+            onClick={() => {
+              queryClient.invalidateQueries({ queryKey: ['book', book.id, 'budget', month] });
+              onDone();
+            }}
+          >
             Reload latest plan
           </Button>
         )}
@@ -387,27 +514,12 @@ function ArrangeHeads({ budget: b, month, byId, onDone }: { budget: BudgetDTO; m
           <Button variant="secondary" className="flex-1" onClick={onDone}>
             Cancel
           </Button>
-          <Button
-            className="flex-1"
-            disabled={!changed || conflict}
-            loading={save.isPending}
-            onClick={() =>
-              save.mutate(
-                { budget: b, lines: order.map((l) => ({ categoryId: l.categoryId, planned: l.planned })) },
-                {
-                  onSuccess: () => {
-                    toast({ message: 'Order saved', duration: 2000 });
-                    onDone();
-                  },
-                },
-              )
-            }
-          >
+          <Button className="flex-1" disabled={!changed || conflict} loading={save.isPending} onClick={() => save.mutate()}>
             Save order
           </Button>
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 

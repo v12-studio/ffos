@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   formatMoney,
+  normalizeGroupOrder,
+  type BookDTO,
   type BudgetDTO,
   type BudgetLineDTO,
   type BudgetSuggestionsDTO,
@@ -10,6 +12,7 @@ import {
   type MemberDTO,
 } from '@ffos/shared';
 import { api } from './api.ts';
+import { useCurrentBook } from './book.tsx';
 
 export function useBudget(bookId: string, month: string, enabled = true) {
   return useQuery({
@@ -170,6 +173,30 @@ export function useUpdateHead(bookId: string) {
     onSuccess: (updated) => {
       queryClient.setQueryData<CategoryDTO[]>(['book', bookId, 'categories'], (list = []) => list.map((c) => (c.id === updated.id ? updated : c)));
       queryClient.invalidateQueries({ queryKey: ['book', bookId, 'budget'] });
+    },
+  });
+}
+
+/** The order this book lists its budget sections in (bills, spending, savings unless someone changed it). */
+export function useGroupOrder(): HeadGroup[] {
+  const { book } = useCurrentBook();
+  // A book list saved for offline use before this setting existed has no order yet.
+  return normalizeGroupOrder(book.groupOrder);
+}
+
+/** Lines grouped into sections in `order`, keeping each section's own order. */
+export function sortByGroup<T extends { group: HeadGroup }>(lines: T[], order: HeadGroup[]): T[] {
+  return order.flatMap((g) => lines.filter((l) => l.group === g));
+}
+
+/** Saves the order of the budget's sections for everyone in the book. */
+export function useSaveGroupOrder(bookId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (groups: HeadGroup[]) => api.put<{ groupOrder: HeadGroup[] }>(`/books/${bookId}/budget-order`, { groups }),
+    onSuccess: ({ groupOrder }) => {
+      queryClient.setQueryData<BookDTO[]>(['books'], (list = []) => list.map((b) => (b.id === bookId ? { ...b, groupOrder } : b)));
+      queryClient.invalidateQueries({ queryKey: ['book', bookId, 'activity'] });
     },
   });
 }

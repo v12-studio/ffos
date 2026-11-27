@@ -208,6 +208,36 @@ export const categoryBudgetSchema = z.object({
     .optional(),
 });
 
+/** The order the budget's sections are listed in: every group exactly once. */
+export const groupOrderSchema = z.object({
+  groups: z
+    .array(z.enum(HEAD_GROUPS))
+    .length(HEAD_GROUPS.length, 'List every section once')
+    .refine((g) => new Set(g).size === g.length, 'List every section once'),
+});
+
+/**
+ * What to export. `what`: budget (plan vs actual per head), transactions, or everything together.
+ * `from`/`to` limit it to a range of months (both optional; neither means all time).
+ * `category` limits it to one head or category.
+ */
+export const EXPORT_KINDS = ['budget', 'transactions', 'everything'] as const;
+export type ExportKind = (typeof EXPORT_KINDS)[number];
+export const EXPORT_FORMATS = ['csv', 'xlsx', 'json'] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+const exportMonthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'Use YYYY-MM');
+
+export const exportQuerySchema = z
+  .object({
+    what: z.enum(EXPORT_KINDS).optional(),
+    format: z.enum(EXPORT_FORMATS).optional(),
+    from: exportMonthSchema.optional(),
+    to: exportMonthSchema.optional(),
+    category: objectIdSchema.optional(),
+  })
+  .refine((q) => !q.from || !q.to || q.from <= q.to, { message: 'The start month must be before the end month', path: ['to'] });
+
 /** Mark a monthly bill paid for `month`, now rather than waiting for its day. */
 export const recurringPaySchema = z.object({ month: monthSchema });
 

@@ -46,15 +46,6 @@ export function escapeRegex(text: string) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Quote a CSV cell. Text starting with = + - @ is prefixed with ' so spreadsheet apps
- * don't run a note like "=HYPERLINK(...)" as a formula.
- */
-function csvCell(value: string): string {
-  const safe = /^[=+\-@\t\r]/.test(value) && !/^-?\d+(\.\d+)?$/.test(value) ? `'${value}` : value;
-  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-}
-
 /** The head group a category is tracked under: the one someone chose, else a guess from its name. */
 export function headGroupOf(c: Pick<CategoryDoc, 'name' | 'group'>): HeadGroup {
   return c.group ?? guessHeadGroup(c.name);
@@ -562,75 +553,6 @@ export const ledgerRoutes = new Hono<AppEnv>()
     });
     const [dto] = await toTransactionDTOs(db, [restored]);
     return c.json(dto);
-  })
-
-  // ── export ──
-  // ?format=csv (transactions, for spreadsheets) or json (full book backup). Phone numbers are never included.
-  .get('/export', requirePermission('book.export'), async (c) => {
-    const format = c.req.query('format') === 'csv' ? 'csv' : 'json';
-    const db = c.get('db');
-    const book = c.get('book');
-    const [categories, transactions, members] = await Promise.all([
-      db.categories.find({ bookId: book._id }).sort({ kind: 1, sort: 1 }).toArray(),
-      db.transactions.find({ bookId: book._id, deletedAt: { $exists: false } }).sort({ date: 1, createdAt: 1 }).toArray(),
-      db.bookMembers.find({ bookId: book._id }).toArray(),
-    ]);
-    const names = await userNames(db, [...members.map((m) => m.userId), ...transactions.map((t) => t.createdBy)]);
-    const categoryName = new Map(categories.map((cat) => [cat._id.toHexString(), cat.name]));
-    const nameOf = (id: ObjectId) => names.get(id.toHexString()) ?? 'Former member';
-
-    await logActivity(db, {
-      bookId: book._id,
-      userId: c.get('userId'),
-      action: 'export',
-      entity: 'book',
-      entityId: book._id,
-      summary: `exported the book (${format.toUpperCase()}, ${transactions.length} transactions)`,
-    });
-
-    if (format === 'csv') {
-      const header = ['Date', 'Type', 'Category', 'Amount', 'Currency', 'Note', 'Added by', 'Added at'];
-      const lines = transactions.map((t) =>
-        [
-          t.date,
-          t.type,
-          categoryName.get(t.categoryId.toHexString()) ?? '',
-          (t.amount / 100).toFixed(2),
-          book.currency,
-          t.note,
-          nameOf(t.createdBy),
-          t.createdAt.toISOString(),
-        ]
-          .map(csvCell)
-          .join(','),
-      );
-      // BOM so Excel opens UTF-8 (₹, non-English names) correctly.
-      const csv = `﻿${[header.join(','), ...lines].join('\r\n')}\r\n`;
-      return c.body(csv, 200, { 'content-type': 'text/csv; charset=utf-8' });
-    }
-
-    return c.json({
-      format: 'ffos-book-export',
-      version: 1,
-      exportedAt: new Date().toISOString(),
-      exportedBy: c.get('user').name,
-      book: { name: book.name, currency: book.currency, createdAt: book.createdAt.toISOString() },
-      members: members.map((m) => ({ name: nameOf(m.userId), role: m.role, joinedAt: m.joinedAt.toISOString() })),
-      categories: categories.map((cat) => ({ ...toCategoryDTO(cat), archived: cat.archived })),
-      transactions: transactions.map((t) => ({
-        id: t._id.toHexString(),
-        date: t.date,
-        type: t.type,
-        amountMinor: t.amount,
-        amount: (t.amount / 100).toFixed(2),
-        categoryId: t.categoryId.toHexString(),
-        category: categoryName.get(t.categoryId.toHexString()) ?? null,
-        note: t.note,
-        addedBy: nameOf(t.createdBy),
-        createdAt: t.createdAt.toISOString(),
-        updatedAt: t.updatedAt.toISOString(),
-      })),
-    });
   })
 
   // ── dashboard summary ──

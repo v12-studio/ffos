@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
-import { ChevronDown, ReceiptText, Search, X } from 'lucide-react';
+import { ChevronDown, Download, ReceiptText, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { formatMoney, type CategoryDTO, type TransactionDTO, type TransactionSearchDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow, useViewedMonth } from '../components/AppShell.tsx';
 import { CategoryTile } from '../components/CategoryIcon.tsx';
+import { ExportSheet } from '../components/ExportSheet.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
 import { Card, Chip, EmptyState, ErrorBanner, inputClass, PageSkeleton, Sheet } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
@@ -31,7 +32,7 @@ const netOf = (rows: TransactionDTO[]) => rows.reduce((sum, t) => sum + (t.type 
  * ?scope=all to search every month instead of one.
  */
 export function TransactionsPage() {
-  const { book } = useCurrentBook();
+  const { book, can } = useCurrentBook();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
   const month = params.get('month') ?? currentMonth();
@@ -53,6 +54,7 @@ export function TransactionsPage() {
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
   const [pickingCategory, setPickingCategory] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const q = useDebounced(search.trim(), 300);
   const categories = useCategories(book.id);
   const byId = useMemo(() => new Map((categories.data ?? []).map((c) => [c.id, c])), [categories.data]);
@@ -172,19 +174,32 @@ export function TransactionsPage() {
         </Chip>
       </div>
 
-      {category && rows.length > 0 ? (
-        <p className="-mt-2 px-0.5 text-label text-muted tabular">
-          {rows.length} entr{rows.length === 1 ? 'y' : 'ies'} · {formatMoney(Math.abs(netOf(rows)), book.currency)}{' '}
-          {scope === 'month' ? `in ${monthLabel(month)}` : allTxns.data?.truncated ? 'in the latest matches' : 'in total'}
-        </p>
-      ) : (
-        rows.length > 0 &&
-        !(scope === 'all' && allTxns.data?.truncated) && (
-          <p className="-mt-2 px-0.5 text-label text-muted tabular">
-            In <span className="font-semibold text-ink">{formatMoney(totalIn, book.currency)}</span> · Out{' '}
-            <span className="font-semibold text-ink">{formatMoney(totalOut, book.currency)}</span>
+      {rows.length > 0 && (
+        <div className="-mt-2 flex min-h-9 items-center gap-2 px-0.5">
+          <p className="min-w-0 flex-1 text-label text-muted tabular">
+            {category ? (
+              <>
+                {rows.length} entr{rows.length === 1 ? 'y' : 'ies'} · {formatMoney(Math.abs(netOf(rows)), book.currency)}{' '}
+                {scope === 'month' ? `in ${monthLabel(month)}` : allTxns.data?.truncated ? 'in the latest matches' : 'in total'}
+              </>
+            ) : (
+              !(scope === 'all' && allTxns.data?.truncated) && (
+                <>
+                  In <span className="font-semibold text-ink">{formatMoney(totalIn, book.currency)}</span> · Out{' '}
+                  <span className="font-semibold text-ink">{formatMoney(totalOut, book.currency)}</span>
+                </>
+              )
+            )}
           </p>
-        )
+          {can('book.export') && (
+            <button
+              onClick={() => setExporting(true)}
+              className="-mr-2 flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg px-2 text-label font-medium text-accent hover:bg-subtle"
+            >
+              <Download className="size-3.5" /> Export
+            </button>
+          )}
+        </div>
       )}
 
       <ErrorBanner error={active.error} />
@@ -235,6 +250,11 @@ export function TransactionsPage() {
         <p className="px-0.5 text-center text-label text-muted">Showing the latest 200 matches. Search for something more specific to see older ones.</p>
       )}
 
+      <ExportSheet
+        open={exporting}
+        onClose={() => setExporting(false)}
+        preset={{ what: 'transactions', period: scope === 'all' ? 'all' : 'month', month, categoryId }}
+      />
       <CategoryPickerSheet
         open={pickingCategory}
         categories={categories.data ?? []}

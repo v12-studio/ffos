@@ -6,7 +6,10 @@ import {
   currentAppMonth,
   daysInMonth,
   formatMoney,
+  groupOrderSchema,
+  HEAD_GROUP_LABELS,
   monthSchema,
+  normalizeGroupOrder,
   recurringDate,
   shiftMonthKey,
   todayInAppZone,
@@ -248,6 +251,26 @@ async function assertBudgetHeads(db: Collections, bookId: ObjectId, ids: string[
 }
 
 export const budgetRoutes = new Hono<AppEnv>()
+  // The order the Budget tab lists its sections in, for everyone in the book.
+  .put('/budget-order', requirePermission('budget.manage'), async (c) => {
+    const { groups } = parse(groupOrderSchema, await c.req.json());
+    const db = c.get('db');
+    const book = c.get('book');
+    const before = normalizeGroupOrder(book.groupOrder);
+    if (before.join() !== groups.join()) {
+      await db.books.updateOne({ _id: book._id }, { $set: { groupOrder: groups, updatedAt: new Date() } });
+      await logActivity(db, {
+        bookId: book._id,
+        userId: c.get('userId'),
+        action: 'settings',
+        entity: 'budget',
+        entityId: book._id,
+        summary: `changed the budget section order to ${groups.map((g) => HEAD_GROUP_LABELS[g].name).join(', ')}`,
+      });
+    }
+    return c.json({ groupOrder: groups });
+  })
+
   .get('/budget/:month', async (c) => {
     const month = parse(monthSchema, c.req.param('month'));
     return c.json(await computeBudget(c.get('db'), c.get('book'), month, c.get('userId')));

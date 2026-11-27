@@ -145,7 +145,7 @@ describe('export', () => {
     expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // UTF-8 BOM for Excel
     const text = new TextDecoder().decode(bytes); // strips the BOM
     const lines = text.trim().split('\r\n');
-    expect(lines[0]).toBe('Date,Type,Category,Amount,Currency,Note,Added by,Added at');
+    expect(lines[0]).toBe('Date,Type,Category,Section,Amount,Currency,Note,Added by,Added at');
     expect(lines[1]).toContain('420.00,INR,"Dinner, with ""friends""",Owner');
     expect(lines[2]).toContain(`"'=HYPERLINK(""http://x"")"`);
   });

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Crown, Download, FileJson, FileSpreadsheet, History, Lock, LogOut, Settings2, Share2, Trash2, UserPlus, X } from 'lucide-react';
+import { Check, Copy, Crown, Download, History, Lock, LogOut, Settings2, Share2, Trash2, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   ASSIGNABLE_ROLES,
@@ -15,12 +15,12 @@ import {
 import { PageTitle } from '../components/AppShell.tsx';
 import { PhoneField } from '../components/auth-ui.tsx';
 import { useConfirm } from '../components/Confirm.tsx';
-import { useToast } from '../components/Toast.tsx';
+import { ExportSheet } from '../components/ExportSheet.tsx';
 import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, ListRow, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
-import { api, download } from '../lib/api.ts';
+import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { relativeTime, todayISO } from '../lib/format.ts';
+import { relativeTime } from '../lib/format.ts';
 
 export function MembersPage() {
   const { book, can } = useCurrentBook();
@@ -107,7 +107,7 @@ export function MembersPage() {
           <SectionTitle>Manage</SectionTitle>
           <Card className="divide-y divide-line overflow-hidden">
             {can('activity.view') && <ListRow icon={History} title="Activity" detail="Who changed what in this book" onClick={() => setPanel('activity')} />}
-            {can('book.export') && <ListRow icon={Download} title="Export" detail="Spreadsheet or full backup" onClick={() => setPanel('export')} />}
+            {can('book.export') && <ListRow icon={Download} title="Export" detail="Budget, transactions or everything · CSV, Excel, backup" onClick={() => setPanel('export')} />}
             {canBookSettings && <ListRow icon={Settings2} title="Book settings" detail={`${book.name} · ${book.currency}`} onClick={() => setPanel('book')} />}
           </Card>
         </section>
@@ -116,9 +116,7 @@ export function MembersPage() {
       <Sheet open={panel === 'activity'} onClose={closePanel} title="Activity">
         <ActivityFeed />
       </Sheet>
-      <Sheet open={panel === 'export'} onClose={closePanel} title="Export">
-        <ExportBook />
-      </Sheet>
+      <ExportSheet open={panel === 'export'} onClose={closePanel} preset={{ what: 'everything', period: 'all' }} />
       <Sheet open={panel === 'book'} onClose={closePanel} title="Book settings">
         <BookSettings onDone={closePanel} />
       </Sheet>
@@ -388,35 +386,6 @@ function ActivityFeed() {
         )}
       </Card>
     </>
-  );
-}
-
-function ExportBook() {
-  const { book } = useCurrentBook();
-  const toast = useToast();
-  const exporter = useMutation({
-    mutationFn: (format: 'csv' | 'json') => {
-      const slug = book.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'book';
-      return download(`/books/${book.id}/export?format=${format}`, `ffos-${slug}-${todayISO()}.${format}`);
-    },
-    onSuccess: (_, format) => toast({ message: `${format === 'csv' ? 'Spreadsheet' : 'Backup'} downloaded`, duration: 2500 }),
-  });
-
-  return (
-      <div className="space-y-3">
-        <p className="text-label text-muted">
-          Download this book's transactions. Deleted items and phone numbers are not included.
-        </p>
-        <div className="grid gap-2 sm:grid-cols-2">
-          <Button variant="secondary" loading={exporter.isPending && exporter.variables === 'csv'} disabled={exporter.isPending} onClick={() => exporter.mutate('csv')}>
-            <FileSpreadsheet className="size-4" /> Spreadsheet (CSV)
-          </Button>
-          <Button variant="secondary" loading={exporter.isPending && exporter.variables === 'json'} disabled={exporter.isPending} onClick={() => exporter.mutate('json')}>
-            <FileJson className="size-4" /> Full backup (JSON)
-          </Button>
-        </div>
-        <ErrorBanner error={exporter.error} />
-      </div>
   );
 }
 

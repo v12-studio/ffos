@@ -1,5 +1,5 @@
 import { ObjectId } from 'mongodb';
-import { BOOK_COLORS, DEFAULT_CATEGORIES, permissionsFor, type BookDTO, type Role } from '@ffos/shared';
+import { BOOK_COLORS, DEFAULT_CATEGORIES, normalizeGroupOrder, permissionsFor, type BookDTO, type Role } from '@ffos/shared';
 import type { ActivityDoc, BookDoc, Collections } from '../db.ts';
 
 export async function createBook(
@@ -48,6 +48,7 @@ export function toBookDTO(book: BookDoc, role: Role, memberCount: number): BookD
     role,
     permissions: permissionsFor(role),
     memberCount,
+    groupOrder: normalizeGroupOrder(book.groupOrder),
   };
 }
 
