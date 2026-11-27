@@ -13,7 +13,7 @@ import { Button, Card, EmptyState, ErrorBanner, Field, PageSkeleton, SectionTitl
 import { ApiError } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 import { limitOf, lineStatus, needsAttention, sectionIdOf, sortBySection, useBudget, useMembers, useSaveSections, useSavePlan, useSections, useUpdateHead } from '../lib/budget.ts';
-import { currentMonth, monthLabel } from '../lib/format.ts';
+import { currentMonth, monthLabel, periodRangeLabel } from '../lib/format.ts';
 
 export function BudgetPage() {
   const { book, can } = useCurrentBook();
@@ -280,6 +280,7 @@ function PlanSummary({ budget: b, currency }: { budget: BudgetDTO; currency: str
       <p className={`text-display font-semibold tracking-tight tabular ${shortfall ? 'text-negative' : 'text-positive'}`}>{money(Math.abs(t.projectedSavings))}</p>
       <p className="mt-0.5 text-label text-muted tabular">
         Of {money(b.income)} income
+        {periodRangeLabel(b.month) && ` · ${periodRangeLabel(b.month)}`}
         {lostToOverspend > 0 && <span className="text-negative"> · {money(lostToOverspend)} lost to overspending</span>}
       </p>
 
@@ -336,6 +337,7 @@ function MonthReview({ budget: b, byId, currency, month }: { budget: BudgetDTO; 
       </p>
       <p className="mt-0.5 text-label text-muted tabular">
         Planned to save {money(t.plannedSavings)}
+        {periodRangeLabel(month) && ` · ${periodRangeLabel(month)}`}
         {t.incomeReceived > 0 && t.incomeReceived !== b.income && ` · income ${money(t.incomeReceived)} of ${money(b.income)} expected`}
       </p>
       <StatRow

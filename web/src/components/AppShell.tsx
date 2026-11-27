@@ -392,16 +392,15 @@ function shortMonthLabel(month: string): string {
 
 export function MonthSwitcher({ month, onChange }: { month: string; onChange: (m: string) => void }) {
   const btn = 'grid size-11 place-items-center text-muted hover:text-ink';
-  // Months that start on salary day show their dates, e.g. 25 Sep – 24 Oct.
+  // Just the month's name; for salary-day months the dates are on the Budget tab (and read out here).
   const range = periodRangeLabel(month);
   return (
     <div className="flex shrink-0 items-center rounded-lg border border-line bg-surface">
       <button onClick={() => onChange(shiftMonth(month, -1))} className={btn} aria-label="Previous month">
         <ChevronLeft className="size-4" />
       </button>
-      <span className="flex min-w-[4.75rem] flex-col items-center text-center whitespace-nowrap" aria-label={`${monthLabel(month)}${range ? `, ${range}` : ''}`}>
-        <span className="text-label leading-tight font-semibold">{shortMonthLabel(month)}</span>
-        {range && <span className="text-[0.625rem] leading-tight text-muted">{range}</span>}
+      <span className="min-w-[4.75rem] text-center text-label font-semibold whitespace-nowrap" aria-label={`${monthLabel(month)}${range ? `, ${range}` : ''}`}>
+        {shortMonthLabel(month)}
       </span>
       <button onClick={() => onChange(shiftMonth(month, 1))} className={btn} aria-label="Next month">
         <ChevronRight className="size-4" />

@@ -61,7 +61,15 @@ interface Plan {
  * opened on a carried plan it's saved as that month's own, so it stays put if an earlier month is edited later.
  */
 async function planFor(db: Collections, book: BookDoc, month: string, userId?: ObjectId): Promise<Plan | null> {
-  const own = await db.budgets.findOne({ bookId: book._id, month });
+  const thisMonth = currentPeriod(calendarOf(book));
+  let own = await db.budgets.findOne({ bookId: book._id, month });
+  // Copies are only saved automatically for the month in progress. One for a later month means the budget
+  // month's dates changed since (Book settings → Budget month starts on); nobody edited it, so it goes and
+  // the month follows the plan before it again.
+  if (own?.carriedFrom && month > thisMonth) {
+    await db.budgets.deleteOne({ _id: own._id, carriedFrom: { $exists: true } });
+    own = null;
+  }
   if (own) return { income: own.income, lines: own.lines, version: own.version, saved: true, carriedFrom: own.carriedFrom ?? null };
   const previous = await db.budgets.find({ bookId: book._id, month: { $lt: month } }).sort({ month: -1 }).limit(1).next();
   if (!previous) return null;
@@ -76,7 +84,7 @@ async function planFor(db: Collections, book: BookDoc, month: string, userId?: O
   );
   const lines = previous.lines.filter((l) => live.has(l.categoryId.toHexString()));
 
-  if (userId && month === currentPeriod(calendarOf(book))) {
+  if (userId && month === thisMonth) {
     const now = new Date();
     try {
       await db.budgets.insertOne({

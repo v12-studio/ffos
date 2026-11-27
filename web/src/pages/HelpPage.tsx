@@ -75,7 +75,7 @@ export function HelpPage() {
             <p>What's left across your spending categories, divided by the days left in the month. Bills and savings aren't included.</p>
           </Topic>
           <Topic title="Paid mid-month? Salary-day months">
-            <p>In <strong>Book settings → Budget month starts on</strong>, pick your salary day. With the 25th, "October" runs from 25 September to 24 October, and every screen follows it.</p>
+            <p>In <strong>Book settings → Budget month starts on</strong>, pick your salary day. With the 5th, "November" runs from 5 November to 4 December: a budget month is named after the month it starts in, like a salary. Every screen follows it.</p>
           </Topic>
           <Topic title="Carrying unspent money over">
             <p>Turn on <strong>Carry over to next month</strong> in a spending category's budget settings. What's left at the month's end is added to next month; going over takes it off. It counts from the month you switch it on.</p>

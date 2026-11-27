@@ -291,35 +291,63 @@ describe('export requests that make no sense', () => {
 describe('budget month from salary day', () => {
   const setStart = (monthStartDay: number) => api('PATCH', `/books/${bookId}`, { token: owner.accessToken, body: { monthStartDay } });
 
-  it('October runs 25 Sep – 24 Oct when salary comes on the 25th', async () => {
-    await entry(heads.Groceries!, 300, '2026-09-25', 'start of October');
-    await entry(heads.Groceries!, 400, '2026-10-24', 'end of October');
-    await entry(heads.Groceries!, 500, '2026-10-25', 'start of November');
-    expect((await setStart(25)).body).toMatchObject({ monthStartDay: 25 });
+  it('November runs 5 Nov – 4 Dec when salary comes on the 5th: named after the month it starts in', async () => {
+    await entry(heads.Groceries!, 300, '2026-11-05', 'start of November');
+    await entry(heads.Groceries!, 400, '2026-12-04', 'end of November');
+    await entry(heads.Groceries!, 500, '2026-12-05', 'start of December');
+    expect((await setStart(5)).body).toMatchObject({ monthStartDay: 5 });
 
-    const october = await api('GET', `/books/${bookId}/transactions?month=2026-10`, { token: owner.accessToken });
-    expect(october.body.map((t: { note: string }) => t.note).sort()).toEqual(['', 'Veg', 'end of October', 'start of October']);
-    const budget = await api('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken });
-    // 12 Sep's Big shop falls in September now; 3 Oct's Veg plus the two above are October's.
-    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Groceries).spent).toBe(rs(1200 + 300 + 400));
-    const summary = await api('GET', `/books/${bookId}/summary?month=2026-11`, { token: owner.accessToken });
+    const november = await api('GET', `/books/${bookId}/transactions?month=2026-11`, { token: owner.accessToken });
+    expect(november.body.map((t: { note: string }) => t.note).sort()).toEqual(['end of November', 'start of November']);
+    // September is 5 Sep – 4 Oct: the rent, the big shop and 3 Oct's veg.
+    const september = await api('GET', `/books/${bookId}/budget/2026-09`, { token: owner.accessToken });
+    expect(september.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Groceries).spent).toBe(rs(5500 + 1200));
+    const summary = await api('GET', `/books/${bookId}/summary?month=2026-12`, { token: owner.accessToken });
     expect(summary.body.expense).toBe(rs(500));
 
-    const trends = await api('GET', `/books/${bookId}/trends?end=2026-11&months=3`, { token: owner.accessToken });
-    expect(trends.body.months.map((m: { expense: number }) => m.expense)).toEqual([rs(10000 + 5500), rs(1200 + 3000 + 300 + 400), rs(500)]);
+    const trends = await api('GET', `/books/${bookId}/trends?end=2026-12&months=4`, { token: owner.accessToken });
+    expect(trends.body.months.map((m: { month: string; expense: number }) => [m.month, m.expense])).toEqual([
+      ['2026-09', rs(10000 + 5500 + 1200)],
+      ['2026-10', rs(3000)],
+      ['2026-11', rs(300 + 400)],
+      ['2026-12', rs(500)],
+    ]);
 
-    const lines = await csv('what=transactions&format=csv&from=2026-11&to=2026-11');
-    expect(lines.slice(1).map((l) => l.slice(0, 10))).toEqual(['2026-10-25']);
+    const lines = await csv('what=transactions&format=csv&from=2026-12&to=2026-12');
+    expect(lines.slice(1).map((l) => l.slice(0, 10))).toEqual(['2026-12-05']);
   });
 
-  it('a monthly entry on the 28th is due in the budget month it falls in', async () => {
-    await setStart(25);
+  it('a monthly entry on the 3rd is due near the end of a budget month that starts on the 5th', async () => {
+    await setStart(5);
     await api('POST', `/books/${bookId}/recurring`, {
       token: owner.accessToken,
-      body: { type: 'expense', amount: rs(999), categoryId: heads.Rent, note: 'Internet', dayOfMonth: 28, startMonth: '2026-10' },
+      body: { type: 'expense', amount: rs(999), categoryId: heads.Rent, note: 'Internet', dayOfMonth: 3, startMonth: '2026-10' },
     });
     const budget = await api('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken });
-    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Rent).due.date).toBe('2026-09-28');
+    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Rent).due.date).toBe('2026-11-03');
+  });
+
+  it('an automatic copy saved for what is now a later month is dropped; that month follows the plan before it', async () => {
+    const { collections } = await import('../src/db.ts');
+    const { ObjectId } = await import('mongodb');
+    const db = await collections();
+    // As if "2030-01" had been the month in progress under an earlier start day, and was copied then.
+    await db.budgets.insertOne({
+      _id: new ObjectId(),
+      bookId: new ObjectId(bookId),
+      month: '2030-01',
+      income: rs(1),
+      lines: [{ categoryId: new ObjectId(heads.Rent!), planned: rs(1) }],
+      carriedFrom: '2026-09',
+      version: 0,
+      createdBy: new ObjectId(owner.user.id),
+      updatedBy: new ObjectId(owner.user.id),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const res = await api('GET', `/books/${bookId}/budget/2030-01`, { token: owner.accessToken });
+    expect(res.body).toMatchObject({ saved: false, carriedFrom: '2026-10', income: rs(32000) });
+    expect(await db.budgets.countDocuments({ bookId: new ObjectId(bookId), month: '2030-01' })).toBe(0);
   });
 
   it('book settings are checked', async () => {

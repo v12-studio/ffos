@@ -37,7 +37,7 @@ export function recurringDate(month: string, dayOfMonth: number): string {
 /** How a book counts days: its time zone, and the day of the month its budget month starts (salary day). */
 export interface BookCalendar {
   timeZone: string;
-  /** 1–28. 1 is the calendar month; 25 makes "October" run 25 Sep – 24 Oct. */
+  /** 1–28. 1 is the calendar month; 5 makes "November" run 5 Nov – 4 Dec (named after the month it starts in). */
   startDay: number;
 }
 
@@ -57,19 +57,20 @@ export function todayIn(timeZone: string, now: Date = new Date()): string {
 
 /**
  * The days of budget month `month` (inclusive). With a start day of 1 it's the calendar month; otherwise it
- * runs from the start day of the month before up to the day before the start day: October with 25 → 25 Sep – 24 Oct.
+ * runs from the start day in that month up to the day before the start day in the next: November with 5 →
+ * 5 Nov – 4 Dec. A budget month is named after the month it starts in, like a salary.
  */
 export function periodRange(month: string, startDay = 1): { from: string; to: string } {
   const start = clampStart(startDay);
   if (start === 1) return { from: `${month}-01`, to: `${month}-${pad(daysInMonth(month))}` };
-  return { from: `${shiftMonthKey(month, -1)}-${pad(start)}`, to: `${month}-${pad(start - 1)}` };
+  return { from: `${month}-${pad(start)}`, to: `${shiftMonthKey(month, 1)}-${pad(start - 1)}` };
 }
 
-/** The budget month a date falls in. */
+/** The budget month a date falls in: days before the start day belong to the month before. */
 export function periodOf(date: string, startDay = 1): string {
   const start = clampStart(startDay);
   const month = date.slice(0, 7);
-  return start > 1 && Number(date.slice(8, 10)) >= start ? shiftMonthKey(month, 1) : month;
+  return start > 1 && Number(date.slice(8, 10)) < start ? shiftMonthKey(month, -1) : month;
 }
 
 /** The current budget month in the book's time zone. */
@@ -92,7 +93,8 @@ export function dayOfPeriod(date: string, startDay = 1): number {
 /** The date a monthly entry on `dayOfMonth` falls on within budget month `month`. */
 export function occurrenceIn(month: string, dayOfMonth: number, startDay = 1): string {
   const start = clampStart(startDay);
-  if (start > 1 && dayOfMonth >= start) return recurringDate(shiftMonthKey(month, -1), dayOfMonth);
+  // Days before the start day come in the second calendar month of the budget month.
+  if (start > 1 && dayOfMonth < start) return recurringDate(shiftMonthKey(month, 1), dayOfMonth);
   return recurringDate(month, dayOfMonth);
 }
 
@@ -101,15 +103,15 @@ export function periodExpression(startDay = 1): unknown {
   const start = clampStart(startDay);
   const month = { $substrBytes: ['$date', 0, 7] };
   if (start === 1) return month;
-  // Dates on or after the start day belong to the next month: build "YYYY-MM" for month + 1.
+  // Dates before the start day belong to the month before: build "YYYY-MM" for month − 1.
   const y = { $toInt: { $substrBytes: ['$date', 0, 4] } };
   const m = { $toInt: { $substrBytes: ['$date', 5, 2] } };
-  const nextY = { $cond: [{ $eq: [m, 12] }, { $add: [y, 1] }, y] };
-  const nextM = { $cond: [{ $eq: [m, 12] }, 1, { $add: [m, 1] }] };
-  const next = {
-    $concat: [{ $toString: nextY }, '-', { $cond: [{ $lt: [nextM, 10] }, { $concat: ['0', { $toString: nextM }] }, { $toString: nextM }] }],
+  const prevY = { $cond: [{ $eq: [m, 1] }, { $subtract: [y, 1] }, y] };
+  const prevM = { $cond: [{ $eq: [m, 1] }, 12, { $subtract: [m, 1] }] };
+  const prev = {
+    $concat: [{ $toString: prevY }, '-', { $cond: [{ $lt: [prevM, 10] }, { $concat: ['0', { $toString: prevM }] }, { $toString: prevM }] }],
   };
-  return { $cond: [{ $gte: [{ $substrBytes: ['$date', 8, 2] }, pad(start)] }, next, month] };
+  return { $cond: [{ $lt: [{ $substrBytes: ['$date', 8, 2] }, pad(start)] }, prev, month] };
 }
 
 /** Months between two YYYY-MM keys (to − from). */

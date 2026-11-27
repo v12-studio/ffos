@@ -96,7 +96,7 @@ export function BookSettings({ onDone }: { onDone: () => void }) {
               <span className="mt-1.5 block text-caption text-muted">
                 {form.monthStartDay === 1
                   ? 'Paid mid-month? Pick your salary day so each budget month runs from one salary to the next.'
-                  : `"October" will run ${form.monthStartDay} Sep – ${form.monthStartDay - 1} Oct. Changing this moves which days count in each month's budget.`}
+                  : `"November" will run ${form.monthStartDay} Nov – ${form.monthStartDay - 1} Dec: each budget month is named after the month it starts in. Changing this moves which days count in each month's budget.`}
               </span>
             </label>
             <label className="block">
