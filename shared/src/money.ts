@@ -10,7 +10,18 @@ export function fromMinor(minor: number): number {
   return minor / 100;
 }
 
-export function formatMoney(minor: number, currency = 'INR', locale = 'en-IN'): string {
+/** How amounts are grouped and punctuated: en-IN 1,00,000.00 · en-US 100,000.00 · de-DE 100.000,00. */
+export const NUMBER_LOCALES = ['en-IN', 'en-US', 'de-DE'] as const;
+export type NumberLocale = (typeof NUMBER_LOCALES)[number];
+
+let defaultLocale: string = 'en-IN';
+
+/** The web app sets this to the current book's number style; the server keeps en-IN. */
+export function setMoneyLocale(locale: string) {
+  defaultLocale = (NUMBER_LOCALES as readonly string[]).includes(locale) ? locale : 'en-IN';
+}
+
+export function formatMoney(minor: number, currency = 'INR', locale = defaultLocale): string {
   return new Intl.NumberFormat(locale, {
     style: 'currency',
     currency,

@@ -1,24 +1,25 @@
 import { Hono } from 'hono';
 import { ObjectId } from 'mongodb';
 import {
-  currentAppMonth,
+  currentPeriod,
+  periodRange,
   exportQuerySchema,
-  HEAD_GROUP_LABELS,
-  normalizeGroupOrder,
+  sectionFor,
   shiftMonthKey,
   type BudgetDTO,
   type ExportFormat,
+  type BudgetSection,
   type ExportKind,
   type HeadGroup,
 } from '@ffos/shared';
 import type { AppEnv } from '../context.ts';
 import type { BookDoc, CategoryDoc, Collections } from '../db.ts';
-import { logActivity } from '../lib/books.ts';
+import { calendarOf, logActivity, sectionsOf } from '../lib/books.ts';
 import { badRequest, notFound, parse } from '../lib/errors.ts';
 import { buildXlsx, type ColumnType } from '../lib/xlsx.ts';
 import { requirePermission } from '../middleware/book.ts';
 import { computeBudget } from './budget.ts';
-import { headGroupOf, toCategoryDTO, userNames } from './ledger.ts';
+import { toCategoryDTO, userNames } from './ledger.ts';
 
 // Mounted under /books/:bookId after requireBook. Phone numbers and deleted items are never included.
 //
@@ -102,7 +103,7 @@ async function budgetMonths(db: Collections, book: BookDoc, from?: string, to?: 
   ]);
   if (!first || !last) return [];
   const start = from && from > first.month ? from : first.month;
-  const thisMonth = currentAppMonth();
+  const thisMonth = currentPeriod(calendarOf(book));
   const end = to ?? (last.month > thisMonth ? last.month : thisMonth);
   return start <= end ? monthsFrom(start, end) : [];
 }
@@ -127,11 +128,12 @@ function headStatus(group: HeadGroup, planned: number, actual: number, paid: boo
 function budgetTables(
   budgets: BudgetDTO[],
   categories: Map<string, CategoryDoc>,
-  order: HeadGroup[],
+  sections: BudgetSection[],
   categoryId?: string,
 ): { heads: Table; summary: Table | null } {
   const nameOf = (id: string) => categories.get(id)?.name ?? 'Unknown';
-  const rank = (g: HeadGroup) => order.indexOf(g);
+  const rank = (id: string) => sections.findIndex((s) => s.id === id);
+  const label = (id: string) => sections.find((s) => s.id === id)?.name ?? '';
   const lineRows: Table['rows'] = [];
   for (const b of budgets) {
     if (!categoryId) {
@@ -147,13 +149,13 @@ function budgetTables(
       ]);
     }
     // Sections in the book's order; heads within a section in the plan's order.
-    const lines = b.lines.filter((l) => !categoryId || l.categoryId === categoryId).sort((x, y) => rank(x.group) - rank(y.group));
+    const lines = b.lines.filter((l) => !categoryId || l.categoryId === categoryId).sort((x, y) => rank(x.section) - rank(y.section));
     for (const l of lines) {
-      lineRows.push([b.month, HEAD_GROUP_LABELS[l.group].name, nameOf(l.categoryId), l.planned, l.spent, l.remaining, headStatus(l.group, l.planned, l.spent, l.due?.paid ?? false)]);
+      lineRows.push([b.month, label(l.section), nameOf(l.categoryId), l.planned, l.spent, l.remaining, headStatus(l.group, l.planned, l.spent, l.due?.paid ?? false)]);
     }
-    const outside = b.unbudgeted.filter((u) => !categoryId || u.categoryId === categoryId).sort((x, y) => rank(x.group) - rank(y.group));
+    const outside = b.unbudgeted.filter((u) => !categoryId || u.categoryId === categoryId).sort((x, y) => rank(x.section) - rank(y.section));
     for (const u of outside) {
-      lineRows.push([b.month, HEAD_GROUP_LABELS[u.group].name, nameOf(u.categoryId), null, u.spent, null, 'Not in budget']);
+      lineRows.push([b.month, label(u.section), nameOf(u.categoryId), null, u.spent, null, 'Not in budget']);
     }
   }
   const heads: Table = {
@@ -161,7 +163,7 @@ function budgetTables(
     columns: [
       { header: 'Month', width: 10 },
       { header: 'Section', width: 11 },
-      { header: 'Head', width: 24 },
+      { header: 'Category', width: 24 },
       { header: 'Planned', type: 'money', width: 14 },
       { header: 'Actual', type: 'money', width: 14 },
       { header: 'Remaining', type: 'money', width: 14 },
@@ -171,14 +173,14 @@ function budgetTables(
   };
   if (categoryId) return { heads, summary: null };
 
-  const planned = (b: BudgetDTO, g: HeadGroup) => b.lines.filter((l) => l.group === g).reduce((s, l) => s + l.planned, 0);
+  const planned = (b: BudgetDTO, id: string) => b.lines.filter((l) => l.section === id).reduce((s, l) => s + l.planned, 0);
   const summary: Table = {
     name: 'Monthly summary',
     columns: [
       { header: 'Month', width: 10 },
       { header: 'Income planned', type: 'money', width: 15 },
       { header: 'Income received', type: 'money', width: 16 },
-      ...order.map((g) => ({ header: `${HEAD_GROUP_LABELS[g].name} planned`, type: 'money' as const, width: 16 })),
+      ...sections.map((sec) => ({ header: `${sec.name} planned`, type: 'money' as const, width: 16 })),
       { header: 'Not given a job', type: 'money', width: 15 },
       { header: 'Spent', type: 'money', width: 14 },
       { header: 'Put aside', type: 'money', width: 14 },
@@ -189,7 +191,7 @@ function budgetTables(
     rows: budgets.map((b) => {
       const t = b.totals;
       const income = t.incomeReceived > 0 ? t.incomeReceived : b.income;
-      return [b.month, b.income, t.incomeReceived, ...order.map((g) => planned(b, g)), t.unallocated, t.spent, t.saved, t.overspent, t.plannedSavings, income - t.spent];
+      return [b.month, b.income, t.incomeReceived, ...sections.map((sec) => planned(b, sec.id)), t.unallocated, t.spent, t.saved, t.overspent, t.plannedSavings, income - t.spent];
     }),
   };
   return { heads, summary };
@@ -204,18 +206,23 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
 
   const db = c.get('db');
   const book = c.get('book');
-  const order = normalizeGroupOrder(book.groupOrder);
+  const sections = sectionsOf(book);
   const { from, to, category: categoryId } = q;
 
-  const categories = await db.categories.find({ bookId: book._id }).sort({ kind: 1, sort: 1 }).toArray();
+  const [categories, accounts] = await Promise.all([
+    db.categories.find({ bookId: book._id }).sort({ kind: 1, sort: 1 }).toArray(),
+    db.accounts.find({ bookId: book._id }).sort({ sort: 1 }).toArray(),
+  ]);
+  const accountName = new Map(accounts.map((a) => [a._id.toHexString(), a.name]));
   const categoryById = new Map(categories.map((cat) => [cat._id.toHexString(), cat]));
   const category = categoryId ? categoryById.get(categoryId) : undefined;
   if (categoryId && !category) throw notFound('Category not found');
-  if (what === 'budget' && category?.kind === 'income') throw badRequest('Budget heads are expense categories. Pick an expense category, or export its transactions.');
+  if (what === 'budget' && category?.kind === 'income') throw badRequest('Only expense categories are in the budget. Pick an expense category, or export its transactions.');
 
   const wantsTransactions = what !== 'budget';
   const wantsBudget = what !== 'transactions';
-  const date = { ...(from ? { $gte: `${from}-01` } : {}), ...(to ? { $lte: `${to}-31` } : {}) };
+  const startDay = calendarOf(book).startDay;
+  const date = { ...(from ? { $gte: periodRange(from, startDay).from } : {}), ...(to ? { $lte: periodRange(to, startDay).to } : {}) };
 
   const [transactions, members] = await Promise.all([
     wantsTransactions
@@ -231,10 +238,10 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
       : [],
     db.bookMembers.find({ bookId: book._id }).toArray(),
   ]);
-  const names = await userNames(db, [...members.map((m) => m.userId), ...transactions.map((t) => t.createdBy)]);
+  const names = await userNames(db, [...members.map((m) => m.userId), ...transactions.flatMap((t) => (t.forMember ? [t.createdBy, t.forMember] : [t.createdBy]))]);
   const nameOf = (id: ObjectId) => names.get(id.toHexString()) ?? 'Former member';
   const categoryName = (id: ObjectId) => categoryById.get(id.toHexString())?.name ?? '';
-  const sectionOf = (cat: CategoryDoc | undefined) => (!cat ? '' : cat.kind === 'income' ? 'Income' : HEAD_GROUP_LABELS[headGroupOf(cat)].name);
+  const sectionOf = (cat: CategoryDoc | undefined) => (!cat ? '' : cat.kind === 'income' ? 'Income' : sectionFor(cat, sections).name);
 
   // The JSON backup stores plans as saved; spreadsheets show each month's plan against what happened.
   const savedPlans =
@@ -259,6 +266,10 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
   });
 
   if (format === 'json') {
+    const [rules, transfers] = await Promise.all([
+      db.recurring.find({ bookId: book._id, ...(category ? { categoryId: category._id } : {}) }).sort({ dayOfMonth: 1 }).toArray(),
+      category ? [] : db.transfers.find({ bookId: book._id, ...(from || to ? { date } : {}) }).sort({ date: 1 }).toArray(),
+    ]);
     return c.json({
       format: 'ffos-book-export',
       version: 1,
@@ -266,9 +277,9 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
       exportedBy: c.get('user').name,
       period: { from: from ?? null, to: to ?? null },
       ...(category ? { onlyCategory: category.name } : {}),
-      book: { name: book.name, currency: book.currency, createdAt: book.createdAt.toISOString(), groupOrder: order },
+      book: { name: book.name, currency: book.currency, createdAt: book.createdAt.toISOString(), sections },
       members: members.map((m) => ({ name: nameOf(m.userId), role: m.role, joinedAt: m.joinedAt.toISOString() })),
-      categories: categories.map((cat) => ({ ...toCategoryDTO(cat), archived: cat.archived })),
+      categories: categories.map((cat) => ({ ...toCategoryDTO(cat, sections), archived: cat.archived })),
       budgets: savedPlans.map((p) => ({
         month: p.month,
         income: p.income,
@@ -276,6 +287,20 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
           .filter((l) => !category || l.categoryId.equals(category._id))
           .map((l) => ({ categoryId: l.categoryId.toHexString(), category: categoryName(l.categoryId) || null, planned: l.planned })),
         carriedFrom: p.carriedFrom ?? null,
+      })),
+      accounts: accounts.map((a) => ({ id: a._id.toHexString(), name: a.name, kind: a.kind, openingBalance: a.openingBalance, openingDate: a.openingDate, archived: a.archived })),
+      transfers: transfers.map((t) => ({ fromAccountId: t.fromAccountId.toHexString(), toAccountId: t.toAccountId.toHexString(), amount: t.amount, date: t.date, note: t.note })),
+      recurring: rules.map((r) => ({
+        type: r.type,
+        amount: r.amount,
+        categoryId: r.categoryId.toHexString(),
+        category: categoryName(r.categoryId) || null,
+        note: r.note,
+        dayOfMonth: r.dayOfMonth,
+        startMonth: r.startMonth,
+        everyMonths: r.everyMonths ?? 1,
+        endMonth: r.endMonth ?? null,
+        active: r.active,
       })),
       transactions: transactions.map((t) => ({
         id: t._id.toHexString(),
@@ -286,6 +311,9 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
         categoryId: t.categoryId.toHexString(),
         category: categoryName(t.categoryId) || null,
         note: t.note,
+        tags: t.tags ?? [],
+        for: t.forMember ? nameOf(t.forMember) : null,
+        accountId: t.accountId?.toHexString() ?? null,
         addedBy: nameOf(t.createdBy),
         createdAt: t.createdAt.toISOString(),
         updatedAt: t.updatedAt.toISOString(),
@@ -296,7 +324,7 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
   // A workbook leads with the monthly summary; a budget CSV is the per-head table.
   const tables: Table[] = [];
   if (wantsBudget) {
-    const { heads, summary } = budgetTables(budgets, categoryById, order, categoryId);
+    const { heads, summary } = budgetTables(budgets, categoryById, sections, categoryId);
     if (summary && format === 'xlsx') tables.push(summary);
     tables.push(heads);
   }
@@ -311,6 +339,9 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
         { header: 'Amount', type: 'money', width: 14 },
         { header: 'Currency', width: 9 },
         { header: 'Note', width: 36 },
+        { header: 'Tags', width: 18 },
+        { header: 'For', width: 14 },
+        { header: 'Account', width: 16 },
         { header: 'Added by', width: 16 },
         { header: 'Added at', width: 22 },
       ],
@@ -322,6 +353,9 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
         t.amount,
         book.currency,
         t.note,
+        (t.tags ?? []).join(', '),
+        t.forMember ? nameOf(t.forMember) : null,
+        t.accountId ? (accountName.get(t.accountId.toHexString()) ?? null) : null,
         nameOf(t.createdBy),
         t.createdAt.toISOString(),
       ]),
@@ -338,6 +372,7 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
         { header: 'Goal', type: 'money', width: 14 },
         { header: 'Goal by', width: 10 },
         { header: 'Allowance of', width: 16 },
+        { header: 'Inside', width: 20 },
       ],
       rows: categories
         .filter((cat) => !category || cat._id.equals(category._id))
@@ -349,6 +384,7 @@ export const exportRoutes = new Hono<AppEnv>().get('/export', requirePermission(
           cat.goal?.target ?? null,
           cat.goal?.by ?? null,
           cat.memberId ? nameOf(cat.memberId) : null,
+          cat.parentId ? (categoryById.get(cat.parentId.toHexString())?.name ?? null) : null,
         ]),
     });
   }

@@ -1,18 +1,18 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowUpDown, Download, History, Pencil, PiggyBank } from 'lucide-react';
+import { AlertTriangle, ArrowUpDown, Download, History, Pencil, PiggyBank, Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import { formatMoney, HEAD_GROUP_LABELS, type BudgetDTO, type BudgetLineDTO, type CategoryDTO, type HeadGroup } from '@ffos/shared';
+import { formatMoney, HEAD_GROUP_LABELS, HEAD_GROUPS, kindOrder, MAX_SECTIONS, type BudgetDTO, type BudgetLineDTO, type BudgetSection, type CategoryDTO, type HeadGroup } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, useViewedMonth } from '../components/AppShell.tsx';
 import { HeadRow, HeadSettingsSheet, HeadSheet, MoveMoneySheet, PayButton } from '../components/BudgetParts.tsx';
 import { ExportSheet } from '../components/ExportSheet.tsx';
 import { DragHandle, moveItem, SortableList } from '../components/Sortable.tsx';
 import { useToast } from '../components/Toast.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
-import { Button, Card, EmptyState, ErrorBanner, PageSkeleton, SectionTitle, StatRow } from '../components/ui.tsx';
+import { Button, Card, EmptyState, ErrorBanner, Field, PageSkeleton, SectionTitle, Segmented, Sheet, StatRow } from '../components/ui.tsx';
 import { ApiError } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { lineStatus, needsAttention, sortByGroup, useBudget, useGroupOrder, useMembers, useSaveGroupOrder, useSavePlan, useUpdateHead } from '../lib/budget.ts';
+import { limitOf, lineStatus, needsAttention, sectionIdOf, sortBySection, useBudget, useMembers, useSaveSections, useSavePlan, useSections, useUpdateHead } from '../lib/budget.ts';
 import { currentMonth, monthLabel } from '../lib/format.ts';
 
 export function BudgetPage() {
@@ -31,7 +31,7 @@ export function BudgetPage() {
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [arranging, setArranging] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const groupOrder = useGroupOrder();
+  const sections = useSections();
   const b = budget.data;
   const canPlan = can('budget.manage');
   const canExport = can('book.export');
@@ -58,7 +58,7 @@ export function BudgetPage() {
   // A finished month can't be fixed, only learned from: just the heads that went over.
   const finished = month < currentMonth();
   const flagged = (l: BudgetLineDTO) => (finished ? lineStatus(l) === 'over' : needsAttention(l, today));
-  const attention = sortByGroup((b?.lines ?? []).filter(flagged), groupOrder);
+  const attention = sortBySection((b?.lines ?? []).filter(flagged), sections);
   const rest = (b?.lines ?? []).filter((l) => !flagged(l));
   const rows = (lines: BudgetLineDTO[], withPay = false) => (
     <Card className="divide-y divide-line overflow-hidden">
@@ -100,7 +100,7 @@ export function BudgetPage() {
                   <Download className="size-3.5" /> Export
                 </button>
               )}
-              {canPlan && b.lines.length > 0 && (
+              {canPlan && (
                 <button onClick={() => setArranging(true)} className="flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-accent hover:bg-subtle">
                   <ArrowUpDown className="size-3.5" /> Arrange
                 </button>
@@ -117,7 +117,7 @@ export function BudgetPage() {
             <ArrangeHeads key={month} budget={b} month={month} byId={byId} onDone={() => setArranging(false)} />
           ) : b.lines.length === 0 ? (
             <Card>
-              <EmptyState icon={<PiggyBank className="size-5" />} title="No budget heads yet">
+              <EmptyState icon={<PiggyBank className="size-5" />} title="No budget categories yet">
                 Edit the plan to split your income into bills, spending and savings.
               </EmptyState>
             </Card>
@@ -129,14 +129,14 @@ export function BudgetPage() {
                   {rows(attention)}
                 </section>
               )}
-              {groupOrder.map((group) => {
-                const lines = rest.filter((l) => l.group === group);
-                const extra = group === 'savings' ? b.unbudgeted.filter((u) => u.group === 'savings') : [];
+              {sections.map((section) => {
+                const lines = rest.filter((l) => sectionIdOf(l, sections) === section.id);
+                const extra = section.kind === 'savings' ? b.unbudgeted.filter((u) => u.group === 'savings' && sectionIdOf(u, sections) === section.id) : [];
                 if (!lines.length && !extra.length) return null;
                 return (
-                  <section key={group}>
-                    <SectionTitle action={<span className="text-label text-muted tabular">{groupSummary(group, b, book.currency)}</span>}>
-                      {HEAD_GROUP_LABELS[group].name}
+                  <section key={section.id}>
+                    <SectionTitle action={<span className="text-label text-muted tabular">{sectionSummary(section, b, sections, book.currency)}</span>}>
+                      {section.name}
                     </SectionTitle>
                     {lines.length > 0 && rows(lines, true)}
                     {extra.length > 0 && (
@@ -176,7 +176,7 @@ export function BudgetPage() {
                     </button>
                   ))}
               </Card>
-              <p className="mt-2 px-0.5 text-label text-muted">These categories have no budget head this month, so they come out of what you save.</p>
+              <p className="mt-2 px-0.5 text-label text-muted">These categories aren't in this month's budget, so they come out of what you save.</p>
             </section>
           )}
         </>
@@ -203,19 +203,24 @@ export function BudgetPage() {
   );
 }
 
-/** The figure beside each group's heading. */
-function groupSummary(group: HeadGroup, b: BudgetDTO, currency: string): string {
+/** The figure beside each section's heading, worded for how it's tracked. */
+function sectionSummary(section: BudgetSection, b: BudgetDTO, sections: BudgetSection[], currency: string): string {
   const money = (n: number) => formatMoney(n, currency);
-  const lines = b.lines.filter((l) => l.group === group);
+  const inSection = <T extends { section?: string; group: HeadGroup }>(xs: T[]) => xs.filter((x) => sectionIdOf(x, sections) === section.id);
+  const lines = inSection(b.lines);
   const planned = lines.reduce((s, l) => s + l.planned, 0);
   const spent = lines.reduce((s, l) => s + l.spent, 0);
-  if (group === 'bills') {
+  if (section.kind === 'bills') {
     const paid = lines.filter((l) => lineStatus(l) === 'done' || lineStatus(l) === 'over').length;
     return `${paid} of ${lines.length} paid`;
   }
-  if (group === 'savings') return `${money(b.totals.saved)} of ${money(planned)} put aside`;
+  if (section.kind === 'savings') {
+    const putAside = spent + inSection(b.unbudgeted).reduce((s, u) => s + u.spent, 0);
+    return `${money(putAside)} of ${money(planned)} put aside`;
+  }
+  const limit = lines.reduce((s, l) => s + limitOf(l), 0);
   const left = lines.reduce((s, l) => s + Math.max(0, l.remaining), 0);
-  return spent > planned ? `${money(spent - planned)} over` : `${money(left)} left`;
+  return spent > limit ? `${money(spent - limit)} over` : `${money(left)} left`;
 }
 
 /** A month following an earlier plan: keep it as is, or change it. */
@@ -261,8 +266,13 @@ function PlanSummary({ budget: b, currency }: { budget: BudgetDTO; currency: str
   const t = b.totals;
   const lostToOverspend = t.plannedSavings - t.projectedSavings;
   const shortfall = t.projectedSavings < 0;
-  const sum = (group: HeadGroup) => b.lines.filter((l) => l.group === group).reduce((s, l) => s + l.planned, 0);
-  const groupOrder = useGroupOrder();
+  const sections = useSections();
+  // One figure per section; with many sections, one per kind so the row still fits.
+  const columns =
+    sections.length <= 4
+      ? sections.map((s) => ({ label: s.name, kind: s.kind, match: (l: BudgetLineDTO) => sectionIdOf(l, sections) === s.id }))
+      : kindOrder(sections).map((k) => ({ label: HEAD_GROUP_LABELS[k].name, kind: k, match: (l: BudgetLineDTO) => l.group === k }));
+  const firstSavings = columns.findIndex((col) => col.kind === 'savings');
 
   return (
     <Card className="p-4">
@@ -292,14 +302,14 @@ function PlanSummary({ budget: b, currency }: { budget: BudgetDTO; currency: str
 
       <StatRow
         className="mt-4 border-t border-line pt-3"
-        items={groupOrder.map((g) => ({
-          label: HEAD_GROUP_LABELS[g].name,
-          // Income not given to any head is saved too.
-          value: money(sum(g) + (g === 'savings' ? Math.max(0, t.unallocated) : 0)),
+        items={columns.map((col, i) => ({
+          label: col.label,
+          // Income not given to any category is saved too.
+          value: money(b.lines.filter(col.match).reduce((s, l) => s + l.planned, 0) + (i === firstSavings ? Math.max(0, t.unallocated) : 0)),
         }))}
       />
       <p className="mt-2 text-caption text-muted tabular">
-        {t.unallocated > 0 && `Savings includes ${money(t.unallocated)} not given to any head. `}
+        {t.unallocated > 0 && `${columns[firstSavings]?.label ?? 'Savings'} includes ${money(t.unallocated)} not given to any category. `}
         {t.incomeReceived > 0 ? `${money(t.incomeReceived)} income recorded so far.` : b.today ? 'No income recorded yet this month.' : ''}
       </p>
     </Card>
@@ -358,108 +368,138 @@ function MonthReview({ budget: b, byId, currency, month }: { budget: BudgetDTO; 
 
 interface ArrangeItem {
   categoryId: string;
-  group: HeadGroup;
+  section: string;
   planned: number;
 }
 
+const newSectionId = () => `s-${Math.random().toString(36).slice(2, 8)}`;
+
 /**
- * Put the sections (bills, spending, savings) in the order the family thinks of them, move a head to
- * another section, and drag heads within a section. Section order is the book's, for every month;
- * a head's section is its own, for every month; the order of heads is saved to this month's plan.
+ * Arrange the budget: name, add, remove and order its sections; move a category to another section;
+ * drag categories within a section. Sections belong to the book (every month); a category's section is
+ * its own (every month); the order of categories is saved to this month's plan.
  */
 function ArrangeHeads({ budget: b, month, byId, onDone }: { budget: BudgetDTO; month: string; byId: Map<string, CategoryDTO>; onDone: () => void }) {
   const { book } = useCurrentBook();
   const queryClient = useQueryClient();
   const toast = useToast();
-  const savedSections = useGroupOrder();
+  const savedSections = useSections();
   const [sections, setSections] = useState(savedSections);
   const [items, setItems] = useState<ArrangeItem[]>(() =>
-    sortByGroup(b.lines, savedSections).map((l) => ({ categoryId: l.categoryId, group: l.group, planned: l.planned })),
+    sortBySection(b.lines, savedSections).map((l) => ({ categoryId: l.categoryId, section: sectionIdOf(l, savedSections), planned: l.planned })),
   );
+  const [editing, setEditing] = useState<BudgetSection | 'new' | null>(null);
   const savePlan = useSavePlan(book.id, month);
-  const saveSections = useSaveGroupOrder(book.id);
+  const saveSections = useSaveSections(book.id);
   const updateHead = useUpdateHead(book.id);
 
   const nameOf = (id: string) => byId.get(id)?.name ?? 'Unknown';
-  const lineGroup = new Map(b.lines.map((l) => [l.categoryId, l.group]));
-  const moved = items.filter((i) => lineGroup.get(i.categoryId) !== i.group);
-  const sectionsChanged = sections.join() !== savedSections.join();
-  // The plan only needs saving when the heads wouldn't already show in this order without it.
-  const newGroup = new Map(items.map((i) => [i.categoryId, i.group]));
-  const wanted = sortByGroup(items, sections).map((i) => i.categoryId);
-  const asIs = sortByGroup(
-    b.lines.map((l) => ({ categoryId: l.categoryId, group: newGroup.get(l.categoryId) ?? l.group })),
-    sections,
-  ).map((l) => l.categoryId);
-  const orderChanged = wanted.join() !== asIs.join();
-  const changed = moved.length > 0 || sectionsChanged || orderChanged;
+  const sectionsChanged = JSON.stringify(sections) !== JSON.stringify(savedSections);
+  // Where the server will put each category once the sections are saved: a removed section's categories
+  // go to the first remaining section of the same kind.
+  const afterSave = (oldSection: string) =>
+    sections.some((s) => s.id === oldSection) ? oldSection : (sections.find((s) => s.kind === savedSections.find((o) => o.id === oldSection)?.kind) ?? sections[0]!).id;
+  const original = new Map(b.lines.map((l) => [l.categoryId, sectionIdOf(l, savedSections)]));
+  const moved = items.filter((i) => afterSave(original.get(i.categoryId)!) !== i.section);
+  const ordered = (list: { categoryId: string; section: string }[]) => sections.flatMap((s) => list.filter((i) => i.section === s.id)).map((i) => i.categoryId);
+  const orderChanged =
+    ordered(items).join() !== ordered(b.lines.map((l) => ({ categoryId: l.categoryId, section: items.find((i) => i.categoryId === l.categoryId)!.section }))).join();
+  const changed = sectionsChanged || moved.length > 0 || orderChanged;
 
   const save = useMutation({
     mutationFn: async () => {
-      for (const item of moved) await updateHead.mutateAsync({ id: item.categoryId, group: item.group });
       if (sectionsChanged) await saveSections.mutateAsync(sections);
+      for (const item of moved) await updateHead.mutateAsync({ id: item.categoryId, section: item.section });
       if (orderChanged) {
-        const ordered = sortByGroup(items, sections);
-        await savePlan.mutateAsync({ budget: b, lines: ordered.map((i) => ({ categoryId: i.categoryId, planned: i.planned })) });
+        const byCategory = new Map(items.map((i) => [i.categoryId, i]));
+        await savePlan.mutateAsync({ budget: b, lines: ordered(items).map((id) => ({ categoryId: id, planned: byCategory.get(id)!.planned })) });
       }
     },
     onSuccess: () => {
-      toast({ message: 'Order saved', duration: 2000 });
+      toast({ message: 'Budget arranged', duration: 2000 });
       onDone();
     },
   });
   const conflict = save.error instanceof ApiError && save.error.status === 409;
 
-  // A head moved to another section goes to the end of it.
-  const moveTo = (id: string, group: HeadGroup) =>
+  // A category moved to another section goes to the end of it.
+  const moveTo = (id: string, section: string) =>
     setItems((all) => {
       const item = all.find((i) => i.categoryId === id)!;
-      return [...all.filter((i) => i.categoryId !== id), { ...item, group }];
+      return [...all.filter((i) => i.categoryId !== id), { ...item, section }];
     });
+  const removeSection = (gone: BudgetSection) => {
+    const remaining = sections.filter((s) => s.id !== gone.id);
+    const target = remaining.find((s) => s.kind === gone.kind)!;
+    setSections(remaining);
+    setItems((all) => all.map((i) => (i.section === gone.id ? { ...i, section: target.id } : i)));
+  };
 
   return (
     <div className="space-y-5">
       <section>
-        <SectionTitle>Section order</SectionTitle>
+        <SectionTitle
+          action={
+            sections.length < MAX_SECTIONS && (
+              <button onClick={() => setEditing('new')} className="flex items-center gap-1 text-label font-medium text-accent">
+                <Plus className="size-3.5" /> Add section
+              </button>
+            )
+          }
+        >
+          Sections
+        </SectionTitle>
         <Card className="overflow-hidden">
           <SortableList
             className="divide-y divide-line"
             items={sections}
-            keyOf={(g) => g}
-            onMove={(from, to) => setSections((s) => moveItem(s, from, to))}
-            renderItem={(group, handle) => {
-              const count = items.filter((i) => i.group === group).length;
+            keyOf={(s) => s.id}
+            onMove={(from, to) => setSections((list) => moveItem(list, from, to))}
+            renderItem={(section, handle) => {
+              const count = items.filter((i) => i.section === section.id).length;
               return (
-                <div className="flex min-h-12 items-center gap-2 pr-4 pl-3">
-                  <DragHandle handle={handle} label={`${HEAD_GROUP_LABELS[group].name} section`} />
-                  <span className="min-w-0 flex-1 truncate text-body font-medium">{HEAD_GROUP_LABELS[group].name}</span>
-                  <span className="shrink-0 text-caption text-muted">
-                    {count} head{count === 1 ? '' : 's'}
+                <div className="flex min-h-12 items-center gap-2 pr-2 pl-3">
+                  <DragHandle handle={handle} label={`${section.name} section`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-body font-medium">{section.name}</span>
+                    <span className="block truncate text-caption text-muted">
+                      {section.name !== HEAD_GROUP_LABELS[section.kind].name ? `Tracked like ${HEAD_GROUP_LABELS[section.kind].name.toLowerCase()} · ` : ''}
+                      {count} categor{count === 1 ? 'y' : 'ies'}
+                    </span>
                   </span>
+                  <button
+                    onClick={() => setEditing(section)}
+                    className="grid size-10 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle hover:text-ink"
+                    aria-label={`Rename or remove ${section.name}`}
+                  >
+                    <Pencil className="size-4" />
+                  </button>
                 </div>
               );
             }}
           />
         </Card>
-        <p className="mt-2 px-0.5 text-caption text-muted">The Budget tab, the plan and the Add screen list sections in this order, for everyone in the book.</p>
+        <p className="mt-2 px-0.5 text-caption text-muted">
+          Name them the way your family thinks, e.g. "EMIs & loans" tracked like bills. The Budget tab, the plan and the Add screen use this order, for everyone in the book.
+        </p>
       </section>
 
-      {sections.map((group) => {
-        const groupItems = items.filter((i) => i.group === group);
+      {sections.map((section) => {
+        const sectionItems = items.filter((i) => i.section === section.id);
         return (
-          <section key={group}>
-            <SectionTitle>{HEAD_GROUP_LABELS[group].name}</SectionTitle>
-            {groupItems.length === 0 ? (
-              <p className="rounded-xl border border-dashed border-line px-4 py-3 text-label text-muted">No heads here. Pick this section beside a head to move it here.</p>
+          <section key={section.id}>
+            <SectionTitle>{section.name}</SectionTitle>
+            {sectionItems.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-line px-4 py-3 text-label text-muted">Nothing here yet. Pick this section beside a category to move it here.</p>
             ) : (
               <Card className="overflow-hidden">
                 <SortableList
                   className="divide-y divide-line"
-                  items={groupItems}
+                  items={sectionItems}
                   keyOf={(i) => i.categoryId}
                   onMove={(from, to) => {
-                    const reordered = moveItem(groupItems, from, to);
-                    setItems((all) => [...all.filter((i) => i.group !== group), ...reordered]);
+                    const reordered = moveItem(sectionItems, from, to);
+                    setItems((all) => [...all.filter((i) => i.section !== section.id), ...reordered]);
                   }}
                   renderItem={(item, handle) => {
                     const name = nameOf(item.categoryId);
@@ -471,14 +511,14 @@ function ArrangeHeads({ budget: b, month, byId, onDone }: { budget: BudgetDTO; m
                           <span className="block text-caption text-muted tabular">{formatMoney(item.planned, book.currency)}</span>
                         </span>
                         <select
-                          value={item.group}
-                          onChange={(e) => moveTo(item.categoryId, e.target.value as HeadGroup)}
+                          value={item.section}
+                          onChange={(e) => moveTo(item.categoryId, e.target.value)}
                           aria-label={`Section for ${name}`}
-                          className="min-h-9 shrink-0 rounded-lg border border-line bg-surface px-2 text-label text-ink outline-none focus:border-accent"
+                          className="min-h-9 max-w-36 shrink-0 rounded-lg border border-line bg-surface px-2 text-label text-ink outline-none focus:border-accent"
                         >
-                          {sections.map((g) => (
-                            <option key={g} value={g}>
-                              {HEAD_GROUP_LABELS[g].name}
+                          {sections.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
                             </option>
                           ))}
                         </select>
@@ -493,8 +533,8 @@ function ArrangeHeads({ budget: b, month, byId, onDone }: { budget: BudgetDTO; m
       })}
 
       <p className="px-0.5 text-caption text-muted">
-        Hold ⠿ and drag to reorder. Moving a head to another section changes how it's tracked in every month (a bill is paid once, spending is drawn
-        down, savings count as saved).
+        Hold ⠿ and drag to reorder. Moving a category to a section of another kind changes how it's tracked in every month (a bill is paid once, spending is
+        drawn down, savings count as saved).
       </p>
       <div className="space-y-2">
         <ErrorBanner error={save.error} />
@@ -515,11 +555,94 @@ function ArrangeHeads({ budget: b, month, byId, onDone }: { budget: BudgetDTO; m
             Cancel
           </Button>
           <Button className="flex-1" disabled={!changed || conflict} loading={save.isPending} onClick={() => save.mutate()}>
-            Save order
+            Save
           </Button>
         </div>
       </div>
+
+      <SectionEditor
+        key={editing === 'new' ? 'new' : (editing?.id ?? 'none')}
+        section={editing}
+        sections={sections}
+        onClose={() => setEditing(null)}
+        onSave={(next) => {
+          setSections((list) => (list.some((s) => s.id === next.id) ? list.map((s) => (s.id === next.id ? next : s)) : [...list, next]));
+          // Categories keep their section; if its kind changed, they're tracked the new way.
+          setEditing(null);
+        }}
+        onRemove={(gone) => {
+          removeSection(gone);
+          setEditing(null);
+        }}
+      />
     </div>
+  );
+}
+
+/** Name a section and choose how it's tracked; or remove it (its categories move to another of the same kind). */
+function SectionEditor({
+  section,
+  sections,
+  onClose,
+  onSave,
+  onRemove,
+}: {
+  section: BudgetSection | 'new' | null;
+  sections: BudgetSection[];
+  onClose: () => void;
+  onSave: (section: BudgetSection) => void;
+  onRemove: (section: BudgetSection) => void;
+}) {
+  const existing = section && section !== 'new' ? section : null;
+  const [name, setName] = useState(existing?.name ?? '');
+  const [kind, setKind] = useState<HeadGroup>(existing?.kind ?? 'bills');
+  if (!section) return null;
+  const trimmed = name.trim();
+  const clash = sections.some((s) => s.id !== existing?.id && s.name.toLowerCase() === trimmed.toLowerCase());
+  // Each kind keeps at least one section.
+  const lastOfKind = (k: HeadGroup) => existing !== null && existing.kind === k && sections.filter((s) => s.kind === k).length === 1;
+  const canRemove = existing !== null && !lastOfKind(existing.kind);
+  const target = existing && sections.find((s) => s.id !== existing.id && s.kind === existing.kind);
+
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      title={existing ? `Edit ${existing.name}` : 'New section'}
+      footer={
+        <Button className="w-full" disabled={!trimmed || trimmed.length > 24 || clash} onClick={() => onSave({ id: existing?.id ?? newSectionId(), name: trimmed, kind })}>
+          {existing ? 'Done' : 'Add section'}
+        </Button>
+      }
+    >
+      <div className="space-y-5">
+        <Field label="Name" value={name} maxLength={24} placeholder="e.g. EMIs & loans, Kids, Giving" error={clash ? 'Another section has this name' : undefined} onChange={(e) => setName(e.target.value)} autoFocus />
+        <div>
+          <p className="mb-1.5 text-label font-medium">Tracked like</p>
+          <Segmented
+            value={kind}
+            onChange={(k) => !lastOfKind(existing?.kind ?? 'bills') || k === existing?.kind ? setKind(k) : undefined}
+            options={HEAD_GROUPS.map((k) => ({ value: k, label: HEAD_GROUP_LABELS[k].name }))}
+          />
+          <p className="mt-1.5 text-caption text-muted">
+            {HEAD_GROUP_LABELS[kind].description}
+            {existing && lastOfKind(existing.kind) && ` This is the only ${HEAD_GROUP_LABELS[existing.kind].name.toLowerCase()} section, so it stays that kind.`}
+          </p>
+        </div>
+        {existing && (
+          <div className="border-t border-line pt-4">
+            <Button variant="danger" className="w-full" disabled={!canRemove} onClick={() => onRemove(existing)}>
+              <Trash2 className="size-4" /> Remove section
+            </Button>
+            <p className="mt-1.5 text-caption text-muted">
+              {canRemove
+                ? `Its categories move to ${target!.name}. Nothing is deleted.`
+                : `Every budget keeps at least one ${HEAD_GROUP_LABELS[existing.kind].name.toLowerCase()} section.`}
+            </p>
+          </div>
+        )}
+      </div>
+    </Sheet>
   );
 }
 

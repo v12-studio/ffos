@@ -6,6 +6,7 @@ import type { AppEnv } from './context.ts';
 import { collections } from './db.ts';
 import { env } from './env.ts';
 import { HttpError } from './lib/errors.ts';
+import { adminRoutes } from './routes/admin.ts';
 import { authRoutes } from './routes/auth.ts';
 import { booksRoutes } from './routes/books.ts';
 import { inviteRoutes } from './routes/invites.ts';
@@ -36,6 +37,7 @@ export function createApp() {
   v1.route('/me', meRoutes);
   v1.route('/invites', inviteRoutes);
   v1.route('/books', booksRoutes);
+  v1.route('/admin', adminRoutes);
   app.route('/api/v1', v1);
 
   app.notFound((c) => c.json<ApiErrorBody>({ error: { code: 'not_found', message: 'Not found' } }, 404));

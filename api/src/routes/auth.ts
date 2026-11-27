@@ -1,11 +1,11 @@
 import { Hono, type Context } from 'hono';
 import { ObjectId } from 'mongodb';
-import { loginSchema, recoverSchema, refreshSchema, registerSchema, setupSchema } from '@ffos/shared';
+import { loginSchema, recoverSchema, refreshSchema, registerSchema, resetWithLinkSchema, setupSchema, type ResetPreviewDTO } from '@ffos/shared';
 import type { AppEnv } from '../context.ts';
 import type { Collections, UserDoc } from '../db.ts';
 import { env } from '../env.ts';
 import { createBook } from '../lib/books.ts';
-import { conflict, forbidden, HttpError, isDuplicateKey, parse, unauthorized } from '../lib/errors.ts';
+import { conflict, forbidden, HttpError, isDuplicateKey, notFound, parse, unauthorized } from '../lib/errors.ts';
 import { addMember, claimInvite, findUsableInvite, releaseInvite } from '../lib/invites.ts';
 import { normaliseRecoveryCode, randomToken, sha256, signAccessToken } from '../lib/tokens.ts';
 import {
@@ -200,4 +200,29 @@ export const authRoutes = new Hono<AppEnv>()
     }
     await db.sessions.deleteMany({ userId: user._id });
     return c.json({ remainingCodes: user.recoveryCodeHashes.length - 1 });
+  })
+
+  // Reset links come from the instance owner (Settings → Users). Shows whose password it resets.
+  .get('/reset/:token', async (c) => {
+    const db = c.get('db');
+    const reset = await db.passwordResets.findOne({ tokenHash: sha256(c.req.param('token')), expiresAt: { $gt: new Date() } });
+    const user = reset && (await db.users.findOne({ _id: reset.userId, disabledAt: { $exists: false } }, { projection: { name: 1 } }));
+    if (!reset || !user) throw notFound('This reset link has expired or was already used. Ask for a new one.');
+    const result: ResetPreviewDTO = { name: user.name, expiresAt: reset.expiresAt.toISOString() };
+    return c.json(result);
+  })
+
+  // Sets the new password, uses up the link and signs out every device.
+  .post('/reset', async (c) => {
+    const input = parse(resetWithLinkSchema, await c.req.json());
+    const db = c.get('db');
+    const reset = await db.passwordResets.findOneAndDelete({ tokenHash: sha256(input.token), expiresAt: { $gt: new Date() } });
+    if (!reset) throw notFound('This reset link has expired or was already used. Ask for a new one.');
+    const res = await db.users.updateOne(
+      { _id: reset.userId, disabledAt: { $exists: false } },
+      { $set: { passwordHash: await hashPassword(input.newPassword), updatedAt: new Date() } },
+    );
+    if (res.matchedCount === 0) throw notFound('This reset link has expired or was already used. Ask for a new one.');
+    await db.sessions.deleteMany({ userId: reset.userId });
+    return c.body(null, 204);
   });

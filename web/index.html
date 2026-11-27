@@ -12,6 +12,16 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Family Finance OS</title>
+    <script>
+      // Apply the saved look (Settings → Appearance) before the first paint. Mirrors src/lib/theme.ts.
+      try {
+        var t = JSON.parse(localStorage.getItem('ffos.theme') || '{}');
+        var r = document.documentElement;
+        if (t.mode) r.dataset.theme = t.mode;
+        if (t.accent) r.dataset.accent = t.accent;
+        if (t.text) r.dataset.text = t.text;
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

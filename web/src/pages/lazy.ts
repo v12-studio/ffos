@@ -28,11 +28,18 @@ export const LoginPage = page(() => import('./AuthPages.tsx'), 'LoginPage');
 export const RecoverPage = page(() => import('./AuthPages.tsx'), 'RecoverPage');
 export const SetupPage = page(() => import('./AuthPages.tsx'), 'SetupPage');
 export const RecoveryCodesScreen = page(() => import('./AuthPages.tsx'), 'RecoveryCodesScreen');
+export const ResetLinkPage = page(() => import('./AuthPages.tsx'), 'ResetLinkPage');
+export const ImportPage = page(() => import('./ImportPage.tsx'), 'ImportPage');
+export const AccountsPage = page(() => import('./AccountsPage.tsx'), 'AccountsPage');
+export const BalancesPage = page(() => import('./BalancesPage.tsx'), 'BalancesPage');
+export const HelpPage = page(() => import('./HelpPage.tsx'), 'HelpPage');
+export const ReportsPage = page(() => import('./ReportsPage.tsx'), 'ReportsPage');
 
 /** Chunk preloaders for the tab-bar / sidebar destinations, keyed by path. */
 export const preloadRoute: Record<string, () => Promise<unknown>> = {
   '/transactions': TransactionsPage.preload,
   '/budget': BudgetPage.preload,
+  '/reports': ReportsPage.preload,
   '/members': MembersPage.preload,
   '/more': MorePage.preload,
 };

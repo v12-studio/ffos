@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   formatMoney,
-  normalizeGroupOrder,
+  kindOrder,
+  normalizeSections,
   type BookDTO,
+  type BudgetSection,
   type BudgetDTO,
   type BudgetLineDTO,
   type BudgetSuggestionsDTO,
@@ -12,6 +14,7 @@ import {
   type MemberDTO,
 } from '@ffos/shared';
 import { api } from './api.ts';
+import { nearThreshold } from './format.ts';
 import { useCurrentBook } from './book.tsx';
 
 export function useBudget(bookId: string, month: string, enabled = true) {
@@ -42,11 +45,14 @@ export function useMembers(bookId: string, enabled = true) {
 }
 
 type Today = BudgetDTO['today'];
-type LineLike = Pick<BudgetLineDTO, 'planned' | 'spent'> & Partial<Pick<BudgetLineDTO, 'group' | 'due'>>;
+type LineLike = Pick<BudgetLineDTO, 'planned' | 'spent'> & Partial<Pick<BudgetLineDTO, 'group' | 'due' | 'rolloverIn'>>;
+
+/** What can be spent in a line this month: its plan plus anything carried over (minus a carried overspend). */
+export const limitOf = (line: Pick<BudgetLineDTO, 'planned'> & Partial<Pick<BudgetLineDTO, 'rolloverIn'>>) => line.planned + (line.rolloverIn ?? 0);
 
 /**
  * How a head is doing, by its group:
- * - spending: ok, `fast` (well ahead of how far the month has gone), `near` (80% used), `over`, or `done` (used exactly)
+ * - spending: ok, `fast` (well ahead of how far the month has gone), `near` (the book's warn level, 80% unless changed), `over`, or `done` (used exactly)
  * - bills: ok (still to pay), `done` (paid) or `over` (cost more than planned)
  * - savings: ok (still to put aside) or `done`. Putting in more than planned is never a problem.
  */
@@ -54,13 +60,14 @@ export type LineStatus = 'ok' | 'fast' | 'near' | 'over' | 'done';
 
 export function lineStatus(line: LineLike, today?: Today): LineStatus {
   const group = line.group ?? 'spending';
+  const limit = limitOf(line);
   if (group === 'savings') return line.planned > 0 && line.spent >= line.planned ? 'done' : 'ok';
-  if (line.spent > line.planned) return 'over';
-  if (line.planned > 0 && line.spent === line.planned) return 'done';
+  if (line.spent > limit) return 'over';
+  if (limit > 0 && line.spent === limit) return 'done';
   if (group === 'bills') return line.due?.paid ? 'done' : 'ok';
-  if (line.planned > 0 && line.spent >= line.planned * 0.8) return 'near';
-  if (today && line.planned > 0) {
-    const used = line.spent / line.planned;
+  if (limit > 0 && line.spent >= limit * nearThreshold()) return 'near';
+  if (today && limit > 0) {
+    const used = line.spent / limit;
     const elapsed = today.day / today.daysInMonth;
     if (used >= 0.4 && used > elapsed + 0.2) return 'fast';
   }
@@ -89,15 +96,16 @@ export const statusText: Record<LineStatus, string> = {
 };
 
 /** Percentage used, capped for drawing a bar. */
-export function usedPct(line: Pick<BudgetLineDTO, 'planned' | 'spent'>): number {
-  if (line.planned <= 0) return line.spent > 0 ? 100 : 0;
-  return Math.min(100, (line.spent / line.planned) * 100);
+export function usedPct(line: Pick<BudgetLineDTO, 'planned' | 'spent'> & Partial<Pick<BudgetLineDTO, 'rolloverIn'>>): number {
+  const limit = limitOf(line);
+  if (limit <= 0) return line.spent > 0 ? 100 : 0;
+  return Math.min(100, (line.spent / limit) * 100);
 }
 
 /** What's left in a head, in the words that fit its group: "₹400 left", "Paid", "₹5,000 to put aside". */
 export function leftLabel(line: LineLike, currency: string): string {
   const money = (n: number) => formatMoney(n, currency);
-  const left = line.planned - line.spent;
+  const left = limitOf(line) - line.spent;
   const group = line.group ?? 'spending';
   if (group === 'savings') {
     if (left > 0) return `${money(left)} to put aside`;
@@ -108,11 +116,11 @@ export function leftLabel(line: LineLike, currency: string): string {
     if (left === 0 || line.due?.paid) return 'Paid';
     return line.spent > 0 ? `${money(left)} still to pay` : `${money(left)} to pay`;
   }
-  return left === 0 && line.planned > 0 ? 'Fully used' : `${money(left)} left`;
+  return left === 0 && limitOf(line) > 0 ? 'Fully used' : `${money(left)} left`;
 }
 
 /** "Seetu" → "savings head"; used in sentences. */
-export const groupNoun: Record<HeadGroup, string> = { bills: 'bill', spending: 'spending head', savings: 'savings head' };
+export const groupNoun: Record<HeadGroup, string> = { bills: 'bill', spending: 'spending category', savings: 'savings category' };
 
 /** "5 Nov", or "today" / "tomorrow". */
 export function shortDay(date: string, today: string): string {
@@ -177,25 +185,34 @@ export function useUpdateHead(bookId: string) {
   });
 }
 
-/** The order this book lists its budget sections in (bills, spending, savings unless someone changed it). */
-export function useGroupOrder(): HeadGroup[] {
+/** The book's budget sections, in order. Falls back to the defaults for a book list cached by an older version. */
+export function useSections(): BudgetSection[] {
   const { book } = useCurrentBook();
-  // A book list saved for offline use before this setting existed has no order yet.
-  return normalizeGroupOrder(book.groupOrder);
+  return normalizeSections(book.sections, book.groupOrder);
 }
 
-/** Lines grouped into sections in `order`, keeping each section's own order. */
-export function sortByGroup<T extends { group: HeadGroup }>(lines: T[], order: HeadGroup[]): T[] {
-  return order.flatMap((g) => lines.filter((l) => l.group === g));
+/** The section a line or category is listed under (older cached data only has the kind). */
+export function sectionIdOf(item: { section?: string; group: HeadGroup }, sections: BudgetSection[]): string {
+  return item.section && sections.some((s) => s.id === item.section) ? item.section : (sections.find((s) => s.kind === item.group) ?? sections[0]!).id;
 }
 
-/** Saves the order of the budget's sections for everyone in the book. */
-export function useSaveGroupOrder(bookId: string) {
+/** Lines grouped section by section in the book's order, keeping each section's own order. */
+export function sortBySection<T extends { section?: string; group: HeadGroup }>(lines: T[], sections: BudgetSection[]): T[] {
+  return sections.flatMap((s) => lines.filter((l) => sectionIdOf(l, sections) === s.id));
+}
+
+/** Saves the budget's sections (names, kinds, order) for everyone in the book. */
+export function useSaveSections(bookId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (groups: HeadGroup[]) => api.put<{ groupOrder: HeadGroup[] }>(`/books/${bookId}/budget-order`, { groups }),
-    onSuccess: ({ groupOrder }) => {
-      queryClient.setQueryData<BookDTO[]>(['books'], (list = []) => list.map((b) => (b.id === bookId ? { ...b, groupOrder } : b)));
+    mutationFn: (sections: BudgetSection[]) => api.put<{ sections: BudgetSection[] }>(`/books/${bookId}/budget-sections`, { sections }),
+    onSuccess: ({ sections }) => {
+      queryClient.setQueryData<BookDTO[]>(['books'], (list = []) =>
+        list.map((b) => (b.id === bookId ? { ...b, sections, groupOrder: kindOrder(sections) } : b)),
+      );
+      // Categories in a removed section moved, and budgets list their section.
+      queryClient.invalidateQueries({ queryKey: ['book', bookId, 'categories'] });
+      queryClient.invalidateQueries({ queryKey: ['book', bookId, 'budget'] });
       queryClient.invalidateQueries({ queryKey: ['book', bookId, 'activity'] });
     },
   });

@@ -1,10 +1,10 @@
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Check, Copy, KeyRound } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router';
-import type { AuthResponse } from '@ffos/shared';
+import { Link, useNavigate, useParams } from 'react-router';
+import type { AuthResponse, ResetPreviewDTO } from '@ffos/shared';
 import { AuthLayout, PhoneField } from '../components/auth-ui.tsx';
-import { Button, ErrorBanner, Field, fieldErrors } from '../components/ui.tsx';
+import { Button, ErrorBanner, Field, fieldErrors, Spinner } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 
@@ -163,6 +163,71 @@ export function RecoveryCodesScreen({ codes, onDone }: { codes: string[]; onDone
           Continue
         </Button>
       </div>
+    </AuthLayout>
+  );
+}
+
+/** A one-time link from the person who set up the app, for someone who can't sign in. */
+export function ResetLinkPage() {
+  const { token = '' } = useParams();
+  const { status, signOut } = useAuth();
+  const navigate = useNavigate();
+  const [password, setPassword] = useState('');
+  const preview = useQuery({ queryKey: ['reset', token], queryFn: () => api.get<ResetPreviewDTO>(`/auth/reset/${token}`), retry: false });
+  const reset = useMutation({ mutationFn: () => api.post('/auth/reset', { token, newPassword: password }) });
+  const errors = fieldErrors(reset.error);
+
+  if (reset.isSuccess) {
+    return (
+      <AuthLayout title="Password changed" subtitle="You've been signed out on every device. Sign in with the new password.">
+        <Button
+          className="w-full"
+          onClick={() => {
+            if (status === 'signedIn') void signOut();
+            navigate('/login');
+          }}
+        >
+          Sign in
+        </Button>
+      </AuthLayout>
+    );
+  }
+  if (preview.isLoading) {
+    return (
+      <AuthLayout title="Reset password">
+        <div className="grid h-24 place-items-center text-muted">
+          <Spinner />
+        </div>
+      </AuthLayout>
+    );
+  }
+  if (preview.error) {
+    return (
+      <AuthLayout title="Link not working">
+        <ErrorBanner error={preview.error} />
+        <p className="mt-4 text-center text-label">
+          <Link to="/login" className="font-medium text-accent">
+            Back to sign in
+          </Link>
+        </p>
+      </AuthLayout>
+    );
+  }
+  return (
+    <AuthLayout title="Set a new password" subtitle={`For ${preview.data!.name}. This link works once.`}>
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          reset.mutate();
+        }}
+      >
+        <ErrorBanner error={Object.keys(errors).length ? null : reset.error} />
+        <Field label="New password" type="password" autoComplete="new-password" hint="At least 8 characters" value={password} error={errors.newPassword} onChange={(e) => setPassword(e.target.value)} required />
+        <Button type="submit" className="w-full" loading={reset.isPending}>
+          Save password
+        </Button>
+      </form>
     </AuthLayout>
   );
 }

@@ -1,11 +1,11 @@
 import { ObjectId } from 'mongodb';
-import { BOOK_COLORS, DEFAULT_CATEGORIES, normalizeGroupOrder, permissionsFor, type BookDTO, type Role } from '@ffos/shared';
+import { APP_TIME_ZONE, BOOK_COLORS, TEMPLATE_CATEGORIES, type BookTemplate, kindOrder, normalizeSections, permissionsFor, type BookCalendar, type BookDTO, type BudgetSection, type Role } from '@ffos/shared';
 import type { ActivityDoc, BookDoc, Collections } from '../db.ts';
 
 export async function createBook(
   db: Collections,
   ownerId: ObjectId,
-  input: { name: string; currency: string; color?: string; isPersonal?: boolean },
+  input: { name: string; currency: string; color?: string; isPersonal?: boolean; template?: BookTemplate },
 ): Promise<BookDoc> {
   const now = new Date();
   const book: BookDoc = {
@@ -21,7 +21,7 @@ export async function createBook(
   await db.books.insertOne(book);
   await db.bookMembers.insertOne({ _id: new ObjectId(), bookId: book._id, userId: ownerId, role: 'owner', joinedAt: now });
   await db.categories.insertMany(
-    DEFAULT_CATEGORIES.map((cat, i) => ({
+    TEMPLATE_CATEGORIES[input.template ?? 'household'].map((cat, i) => ({
       _id: new ObjectId(),
       bookId: book._id,
       ...cat,
@@ -48,8 +48,23 @@ export function toBookDTO(book: BookDoc, role: Role, memberCount: number): BookD
     role,
     permissions: permissionsFor(role),
     memberCount,
-    groupOrder: normalizeGroupOrder(book.groupOrder),
+    sections: sectionsOf(book),
+    groupOrder: kindOrder(sectionsOf(book)),
+    timeZone: book.timeZone ?? APP_TIME_ZONE,
+    monthStartDay: book.monthStartDay ?? 1,
+    numberLocale: book.numberLocale ?? 'en-IN',
+    alertAt: book.alertAt ?? 80,
   };
+}
+
+/** How the book counts "today" and its budget months. */
+export function calendarOf(book: Pick<BookDoc, 'timeZone' | 'monthStartDay'>): BookCalendar {
+  return { timeZone: book.timeZone ?? APP_TIME_ZONE, startDay: book.monthStartDay ?? 1 };
+}
+
+/** The book's budget sections, in order (the three defaults until someone changes them). */
+export function sectionsOf(book: Pick<BookDoc, 'sections' | 'groupOrder'>): BudgetSection[] {
+  return normalizeSections(book.sections, book.groupOrder);
 }
 
 export async function logActivity(db: Collections, entry: Omit<ActivityDoc, '_id' | 'at'>) {

@@ -5,6 +5,7 @@ import { Link, useNavigate } from 'react-router';
 import { formatMoney, type BudgetDTO, type BudgetLineDTO, type CategoryDTO, type SummaryDTO } from '@ffos/shared';
 import { MonthSwitcher, PageTitle, TransactionRow, useOpenTransaction, useViewedMonth } from '../components/AppShell.tsx';
 import { HeadRow, PayButton, SafeToSpend } from '../components/BudgetParts.tsx';
+import { GettingStarted } from '../components/GettingStarted.tsx';
 import { tileColor } from '../components/CategoryIcon.tsx';
 import { RecurringDueCard, useRecurringDue } from '../components/RecurringDue.tsx';
 import { TrendsCard, useTrends } from '../components/TrendsCard.tsx';
@@ -14,11 +15,14 @@ import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
 import { lineStatus, needsAttention, useBudget } from '../lib/budget.ts';
+import { useTheme } from '../lib/theme.ts';
+import { useAccounts } from '../lib/accounts.ts';
 import { currentMonth, monthLabel, shiftMonth, todayISO } from '../lib/format.ts';
 
 export function HomePage() {
   const { book, can } = useCurrentBook();
   const openTransaction = useOpenTransaction();
+  const [prefs] = useTheme();
   const [month, setMonth] = useState(currentMonth);
   useViewedMonth(month);
   const categories = useCategories(book.id);
@@ -50,56 +54,71 @@ export function HomePage() {
         <PageSkeleton />
       ) : (
         <>
+          {month === currentMonth() && <GettingStarted hasBudget={b.exists} hasEntries={s.count > 0} />}
           {planned ? (
             <BudgetOverview budget={b} month={month} byId={byId} />
           ) : (
             <SummaryCard summary={s} month={month} money={money} budget={b} />
           )}
-          {month === currentMonth() && (
-            <RecurringDueCard
-              month={month}
-              hideCategoryIds={planned ? new Set(b.lines.filter((l) => l.group === 'bills' && l.due).map((l) => l.categoryId)) : undefined}
-            />
+          {s.count === 0 && !planned && (
+            <Card>
+              <EmptyState icon={<ReceiptText className="size-5" />} title="No transactions this month">
+                {can('txn.create') ? (
+                  <Button className="mt-4" onClick={() => openTransaction()}>
+                    Add a transaction
+                  </Button>
+                ) : (
+                  'Entries added by members will appear here.'
+                )}
+              </EmptyState>
+            </Card>
           )}
 
-          {s.count === 0 ? (
-            !planned && (
-              <Card>
-                <EmptyState icon={<ReceiptText className="size-5" />} title="No transactions this month">
-                  {can('txn.create') ? (
-                    <Button className="mt-4" onClick={() => openTransaction()}>
-                      Add a transaction
-                    </Button>
-                  ) : (
-                    'Entries added by members will appear here.'
-                  )}
-                </EmptyState>
-              </Card>
-            )
-          ) : (
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <section>
-                <SectionTitle
-                  action={
-                    <Link to="/transactions" className="text-label font-medium text-accent">
-                      View all
-                    </Link>
-                  }
-                >
-                  Recent
-                </SectionTitle>
-                <Card className="divide-y divide-line overflow-hidden">
-                  {s.recent.map((t) => (
-                    <TransactionRow key={t.id} txn={t} category={byId.get(t.categoryId)} currency={book.currency} showDate />
-                  ))}
-                </Card>
-              </section>
-
-              {!planned && s.byCategory.length > 0 && <SpendingCard summary={s} byId={byId} month={month} money={money} />}
-            </div>
-          )}
-
-          <TrendsCard month={month} onSelect={setMonth} />
+          {/* The rest, in the order chosen in Settings → Appearance (cards left out are hidden). */}
+          {prefs.overview.map((card) => {
+            if (card === 'balances') return <BalancesCard key={card} />;
+            if (card === 'due') {
+              return month === currentMonth() ? (
+                <RecurringDueCard
+                  key={card}
+                  month={month}
+                  hideCategoryIds={planned ? new Set(b.lines.filter((l) => l.group === 'bills' && l.due).map((l) => l.categoryId)) : undefined}
+                />
+              ) : null;
+            }
+            if (card === 'recent') {
+              return s.count > 0 ? (
+                <section key={card}>
+                  <SectionTitle
+                    action={
+                      <Link to="/transactions" className="text-label font-medium text-accent">
+                        View all
+                      </Link>
+                    }
+                  >
+                    Recent
+                  </SectionTitle>
+                  <Card className="divide-y divide-line overflow-hidden">
+                    {s.recent.map((t) => (
+                      <TransactionRow key={t.id} txn={t} category={byId.get(t.categoryId)} currency={book.currency} showDate />
+                    ))}
+                  </Card>
+                </section>
+              ) : null;
+            }
+            if (card === 'spending') {
+              // With a budget, the budget card already shows where the money went.
+              return !planned && s.byCategory.length > 0 ? <SpendingCard key={card} summary={s} byId={byId} month={month} money={money} /> : null;
+            }
+            return (
+              <div key={card}>
+                <TrendsCard month={month} onSelect={setMonth} />
+                <Link to="/reports" className="mt-2 flex min-h-9 items-center justify-end gap-1 px-0.5 text-label font-medium text-accent">
+                  More reports <ChevronRight className="size-3.5" />
+                </Link>
+              </div>
+            );
+          })}
         </>
       )}
     </div>
@@ -264,7 +283,7 @@ function LastMonthReview({ month }: { month: string }) {
           <span className="block font-medium">How {name} went</span>
           <span className="block text-muted tabular">
             {saved >= 0 ? `Saved ${money(saved)}` : `Short by ${money(-saved)}`} of {money(p.totals.plannedSavings)} planned
-            {over > 0 && ` · ${over} head${over === 1 ? '' : 's'} over`}
+            {over > 0 && ` · ${over} categor${over === 1 ? 'y' : 'ies'} over`}
           </span>
         </span>
         <ChevronRight className="size-4 shrink-0 text-muted" />
@@ -382,6 +401,37 @@ function SpendingCard({
             </Link>
           )}
         </div>
+      </Card>
+    </section>
+  );
+}
+
+/** Each account's balance at a glance; only shown once the book has accounts. */
+function BalancesCard() {
+  const { book } = useCurrentBook();
+  const accounts = useAccounts(book.id);
+  const open = (accounts.data ?? []).filter((a) => !a.archived);
+  if (!open.length) return null;
+  const money = (n: number) => `${n < 0 ? '−' : ''}${formatMoney(Math.abs(n), book.currency)}`;
+  const total = open.reduce((s, a) => s + a.balance, 0);
+  return (
+    <section>
+      <SectionTitle
+        action={
+          <Link to="/accounts" className="text-label font-medium text-accent">
+            All accounts
+          </Link>
+        }
+      >
+        Balances · <span className="tabular">{money(total)}</span>
+      </SectionTitle>
+      <Card className="divide-y divide-line overflow-hidden">
+        {open.slice(0, 5).map((a) => (
+          <Link key={a.id} to="/accounts" className="flex min-h-12 items-center justify-between gap-3 px-4 py-2 hover:bg-subtle/60">
+            <span className="min-w-0 truncate text-body">{a.name}</span>
+            <span className={`shrink-0 text-body font-medium tabular ${a.balance < 0 ? 'text-negative' : ''}`}>{money(a.balance)}</span>
+          </Link>
+        ))}
       </Card>
     </section>
   );

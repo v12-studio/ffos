@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { can, type BookDTO, type Permission } from '@ffos/shared';
 import { api } from './api.ts';
+import { applyBookPreferences } from './format.ts';
 import { loadSnapshot, saveSnapshot } from './snapshot.ts';
 
 const BOOK_KEY = 'ffos.book';
@@ -41,6 +42,9 @@ export function BookProvider({ children }: { children: ReactNode }) {
   const books = booksQuery.data ?? [];
   // Fall back to the first book if the remembered one is gone (left, removed, deleted).
   const book = books.find((b) => b.id === selectedId) ?? books[0] ?? null;
+  // Set before children render, so every date and amount on screen uses this book's settings.
+  // (A book list cached by an older version lacks these; the defaults apply.)
+  if (book) applyBookPreferences(book);
 
   useEffect(() => {
     if (!book) return;

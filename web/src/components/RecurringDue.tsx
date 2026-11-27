@@ -28,7 +28,7 @@ export function useRecurringDue(bookId: string, month: string, enabled = true) {
   });
 }
 
-/** "3 monthly entries due. Add them?" on the Overview for the current month. */
+/** "3 repeating entries due. Add them?" on the Overview for the current month. */
 export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /** Already shown elsewhere, e.g. as bills on the budget. */ hideCategoryIds?: Set<string> }) {
   const { book, can } = useCurrentBook();
   const queryClient = useQueryClient();
@@ -45,7 +45,7 @@ export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /*
     onSuccess: ({ added }) => {
       refresh();
       setUnticked(new Set());
-      toast({ message: `Added ${added} monthly entr${added === 1 ? 'y' : 'ies'}`, duration: 2500 });
+      toast({ message: `Added ${added} repeating entr${added === 1 ? 'y' : 'ies'}`, duration: 2500 });
     },
   });
   const skip = useMutation({
@@ -67,7 +67,7 @@ export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /*
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-body font-semibold">
-            {items.length} monthly entr{items.length === 1 ? 'y' : 'ies'} due
+            {items.length} repeating entr{items.length === 1 ? 'y' : 'ies'} due
           </p>
           <p className="text-label text-muted">{canAdd ? `Add ${items.length === 1 ? 'it' : 'them'} to this month?` : 'Someone who can add entries can record them.'}</p>
         </div>
@@ -100,7 +100,7 @@ export function RecurringDueCard({ month, hideCategoryIds }: { month: string; /*
               )}
               <CategoryTile category={cat} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-label font-medium">{r.note || cat?.name || 'Monthly entry'}</span>
+                <span className="block truncate text-label font-medium">{r.note || cat?.name || 'Repeating entry'}</span>
                 <span className="block truncate text-caption text-muted">
                   {shortDate(date)}
                   {r.note && cat ? ` · ${cat.name}` : ''}

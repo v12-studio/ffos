@@ -8,6 +8,7 @@ import { ToastProvider } from './components/Toast.tsx';
 import { ApiError } from './lib/api.ts';
 import { AuthProvider } from './lib/auth.tsx';
 import { persistQueries, restoreQueries } from './lib/persist.ts';
+import { applyTheme, loadTheme } from './lib/theme.ts';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -21,6 +22,8 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+applyTheme(loadTheme());
 
 // Paint from the last session's data immediately; queries refetch in the background.
 restoreQueries(queryClient);

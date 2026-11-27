@@ -192,6 +192,34 @@ describe('recurring entries', () => {
     expect((await due()).body.items).toHaveLength(0);
   });
 
+  it('quarterly and yearly entries are only due in their months; an EMI stops after its last month', async () => {
+    const start = shiftMonthKey(thisMonth(), -3);
+    const quarterly = (await setUp({ note: 'Water', everyMonths: 3, startMonth: start })).body;
+    const yearly = (await setUp({ note: 'Insurance', everyMonths: 12, startMonth: shiftMonthKey(thisMonth(), -1) })).body;
+    const emi = (await setUp({ note: 'Phone EMI', startMonth: shiftMonthKey(thisMonth(), -2), endMonth: shiftMonthKey(thisMonth(), -1) })).body;
+    expect(quarterly).toMatchObject({ everyMonths: 3, nextDueMonth: thisMonth() });
+    expect(yearly).toMatchObject({ everyMonths: 12, nextDueMonth: shiftMonthKey(thisMonth(), 11) });
+    expect(emi).toMatchObject({ endMonth: shiftMonthKey(thisMonth(), -1), nextDueMonth: null });
+
+    // This month: only the quarterly one is due.
+    expect((await due()).body.items.map((i) => i.recurring.note)).toEqual(['Water']);
+    // Last month: the yearly one started and the EMI was still running; the quarterly one wasn't due.
+    const last = await api<RecurringDueDTO>('GET', `/books/${bookId}/recurring/due?month=${shiftMonthKey(thisMonth(), -1)}`, { token: owner.accessToken });
+    expect(last.body.items.map((i) => i.recurring.note).sort()).toEqual(['Insurance', 'Phone EMI']);
+
+    // Can't be paid in a month it isn't due.
+    const pay = await api('POST', `/books/${bookId}/recurring/${yearly.id}/pay`, { token: owner.accessToken, body: { month: thisMonth() } });
+    expect(pay.status).toBe(400);
+
+    // Ending can be changed or removed.
+    const ended = await api('PATCH', `/books/${bookId}/recurring/${quarterly.id}`, { token: owner.accessToken, body: { endMonth: shiftMonthKey(start, -1) } });
+    expect(ended.status).toBe(400);
+    const open = await api('PATCH', `/books/${bookId}/recurring/${emi.id}`, { token: owner.accessToken, body: { endMonth: null } });
+    expect(open.body).toMatchObject({ endMonth: null, nextDueMonth: thisMonth() });
+    expect((await setUp({ endMonth: shiftMonthKey(thisMonth(), -1) })).status).toBe(400);
+    expect((await setUp({ everyMonths: 5 })).status).toBe(400);
+  });
+
   it('day 31 falls on the last day of shorter months', async () => {
     const { recurringDate } = await import('@ffos/shared');
     expect(recurringDate('2026-02', 31)).toBe('2026-02-28');
@@ -257,5 +285,115 @@ describe('trends', () => {
       { categoryId: cat('Rent').id, totals: [0, 0, 7000] },
       { categoryId: cat('Groceries').id, totals: [5000, 0, 0] },
     ]);
+  });
+});
+
+describe('tags, for whom, filters and bulk changes', () => {
+  const entry = (body: Record<string, unknown>) => add({ date: '2026-10-05', ...body }).then((r) => r.body as TransactionDTO);
+  const search = (query: string) => api('GET', `/books/${bookId}/transactions/search?${query}`, { token: owner.accessToken });
+
+  it('entries carry tags and who they were for; search filters by them, dates and amounts', async () => {
+    const member = await registerMember(owner.accessToken, bookId, 'contributor', 'Kavya');
+    const fees = await entry({ amount: 500000, note: 'School fees', tags: ['kids', 'Kids', 'school'], forMemberId: member.user.id });
+    expect(fees).toMatchObject({ tags: ['kids', 'school'], forMemberId: member.user.id });
+    await entry({ amount: 2000, note: 'Ice cream', tags: ['kids'], date: '2026-09-20' });
+    await entry({ amount: 90000, note: 'Petrol' });
+    expect((await add({ date: '2026-10-05', forMemberId: '0123456789abcdef01234567' })).status).toBe(400);
+
+    expect((await search('tag=KIDS')).body.items.map((t: TransactionDTO) => t.note)).toEqual(['School fees', 'Ice cream']);
+    expect((await search(`forMember=${member.user.id}`)).body.items).toHaveLength(1);
+    expect((await search('from=2026-10-01&to=2026-10-31')).body.items).toHaveLength(2);
+    const big = await search('min=50000&sort=smallest');
+    expect(big.body.items.map((t: TransactionDTO) => t.note)).toEqual(['Petrol', 'School fees']);
+    expect(big.body.totals).toEqual({ count: 2, income: 0, expense: 590000 });
+    expect((await search('q=school')).body.items).toHaveLength(1);
+
+    const tags = await api('GET', `/books/${bookId}/tags`, { token: owner.accessToken });
+    expect(tags.body).toEqual([{ tag: 'kids', count: 2 }, { tag: 'school', count: 1 }]);
+
+    // Clearing tags and the person.
+    const cleared = await api('PATCH', `/books/${bookId}/transactions/${fees.id}`, { token: owner.accessToken, body: { tags: [], forMemberId: null, version: fees.version } });
+    expect(cleared.body).toMatchObject({ tags: [], forMemberId: null });
+  });
+
+  it('changes many entries at once, skipping ones the person may not change', async () => {
+    const a = await entry({ amount: 100, note: 'a' });
+    const b = await entry({ amount: 200, note: 'b' });
+    const contributor = await registerMember(owner.accessToken, bookId, 'contributor');
+    const mine = (await add({ date: '2026-10-05', amount: 300, note: 'mine' }, contributor.accessToken)).body as TransactionDTO;
+    const bulk = (body: object, token = owner.accessToken) => api('POST', `/books/${bookId}/transactions/bulk`, { token, body });
+
+    const fuel = cat('Fuel & Transport').id;
+    expect((await bulk({ ids: [a.id, b.id], action: 'category', categoryId: fuel })).body).toEqual({ changed: 2, skipped: 0 });
+    expect((await bulk({ ids: [a.id, b.id, mine.id], action: 'addTag', tag: 'trip' })).body).toEqual({ changed: 3, skipped: 0 });
+    // A contributor can only change their own.
+    expect((await bulk({ ids: [a.id, mine.id], action: 'removeTag', tag: 'TRIP' }, contributor.accessToken)).body).toEqual({ changed: 1, skipped: 1 });
+    expect((await bulk({ ids: [a.id, b.id], action: 'delete' })).body).toEqual({ changed: 2, skipped: 0 });
+    expect((await search('tag=trip')).body.items).toHaveLength(0);
+    expect((await bulk({ ids: [a.id, b.id], action: 'restore' })).body).toEqual({ changed: 2, skipped: 0 });
+    const back = (await search('tag=trip')).body.items as TransactionDTO[];
+    expect(back.map((t) => [t.note, t.categoryId])).toEqual(expect.arrayContaining([['a', fuel], ['b', fuel]]));
+  });
+
+  it('merges one category into another, moving entries, repeating entries and budget amounts', async () => {
+    const groceries = cat('Groceries').id;
+    const food = cat('Food & Dining').id;
+    await entry({ amount: 1000, categoryId: food });
+    await api('POST', `/books/${bookId}/recurring`, { token: owner.accessToken, body: { type: 'expense', amount: 500, categoryId: food, note: 'Tiffin', dayOfMonth: 2, startMonth: '2026-10' } });
+    await api('PUT', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken, body: { income: 1000000, lines: [{ categoryId: groceries, planned: 300000 }, { categoryId: food, planned: 200000 }] } });
+
+    const res = await api('POST', `/books/${bookId}/categories/${food}/merge`, { token: owner.accessToken, body: { into: groceries } });
+    expect(res.body).toEqual({ moved: 1, plans: 1 });
+    const budget = await api('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken });
+    expect(budget.body.lines).toEqual([expect.objectContaining({ categoryId: groceries, planned: 500000, spent: 1000 })]);
+    const rules = await api('GET', `/books/${bookId}/recurring`, { token: owner.accessToken });
+    expect(rules.body[0].categoryId).toBe(groceries);
+    expect((await api('GET', `/books/${bookId}/categories`, { token: owner.accessToken })).body.some((x: CategoryDTO) => x.id === food)).toBe(false);
+
+    // Income into expense, or merging away "Other", isn't allowed.
+    expect((await api('POST', `/books/${bookId}/categories/${cat('Salary').id}/merge`, { token: owner.accessToken, body: { into: groceries } })).status).toBe(400);
+    expect((await api('POST', `/books/${bookId}/categories/${cat('Other').id}/merge`, { token: owner.accessToken, body: { into: groceries } })).status).toBe(400);
+  });
+
+  it('deletes only unused categories', async () => {
+    expect((await api('DELETE', `/books/${bookId}/categories/${cat('Medical').id}`, { token: owner.accessToken })).status).toBe(204);
+    await entry({ amount: 100, categoryId: cat('Shopping').id });
+    const used = await api('DELETE', `/books/${bookId}/categories/${cat('Shopping').id}`, { token: owner.accessToken });
+    expect(used.status).toBe(409);
+    expect(used.body.error.message).toContain('1 transaction');
+  });
+});
+
+describe('sub-categories', () => {
+  const create = (name: string, parentId?: string) => api('POST', `/books/${bookId}/categories`, { token: owner.accessToken, body: { name, kind: 'expense', ...(parentId ? { parentId } : {}) } });
+  const patch = (id: string, body: object) => api('PATCH', `/books/${bookId}/categories/${id}`, { token: owner.accessToken, body });
+
+  it('sit one level inside a category of the same kind', async () => {
+    const groceries = cat('Groceries').id;
+    const milk = (await create('Milk', groceries)).body;
+    expect(milk.parentId).toBe(groceries);
+    // Not inside a sub-category, not inside an income category, and a parent can't become a child.
+    expect((await create('Toned milk', milk.id)).status).toBe(400);
+    expect((await create('Bonus', cat('Salary').id)).status).toBe(400);
+    expect((await patch(groceries, { parentId: cat('Food & Dining').id })).status).toBe(400);
+    expect((await patch(milk.id, { parentId: milk.id })).status).toBe(400);
+
+    const veg = (await create('Vegetables')).body;
+    expect((await patch(veg.id, { parentId: groceries })).body.parentId).toBe(groceries);
+    expect((await patch(veg.id, { parentId: null })).body.parentId).toBeNull();
+  });
+
+  it('follow their parent when it is merged, and become top-level when it is deleted', async () => {
+    const parent = (await create('Kids')).body;
+    const child = (await create('School supplies', parent.id)).body;
+    await api('POST', `/books/${bookId}/categories/${parent.id}/merge`, { token: owner.accessToken, body: { into: cat('Education').id } });
+    const after = (await api('GET', `/books/${bookId}/categories`, { token: owner.accessToken })).body as CategoryDTO[];
+    expect(after.find((c) => c.id === child.id)!.parentId).toBe(cat('Education').id);
+
+    const unused = (await create('Hobbies')).body;
+    const sub = (await create('Painting', unused.id)).body;
+    expect((await api('DELETE', `/books/${bookId}/categories/${unused.id}`, { token: owner.accessToken })).status).toBe(204);
+    const later = (await api('GET', `/books/${bookId}/categories`, { token: owner.accessToken })).body as CategoryDTO[];
+    expect(later.find((c) => c.id === sub.id)!.parentId).toBeNull();
   });
 });

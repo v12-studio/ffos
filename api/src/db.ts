@@ -1,5 +1,5 @@
 import { MongoClient, type Collection, type Db, type ObjectId } from 'mongodb';
-import type { AssignableRole, HeadGroup, Role } from '@ffos/shared';
+import type { AssignableRole, BudgetSection, HeadGroup, Role } from '@ffos/shared';
 import { env } from './env.ts';
 
 // ── document types ──
@@ -18,6 +18,8 @@ export interface UserDoc extends Timestamps {
   isInstanceOwner: boolean;
   recoveryCodeHashes: string[];
   disabledAt?: Date;
+  /** Which reminders to push; unset means both on. */
+  notify?: { bills: boolean; budget: boolean };
 }
 
 export interface SessionDoc {
@@ -27,6 +29,40 @@ export interface SessionDoc {
   deviceName: string;
   createdAt: Date;
   lastUsedAt: Date;
+  expiresAt: Date;
+}
+
+/** A one-time password reset link made by the instance owner. */
+export interface PasswordResetDoc {
+  _id: ObjectId;
+  userId: ObjectId;
+  tokenHash: string;
+  createdBy: ObjectId;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+/** A browser that agreed to receive notifications for this person. */
+export interface PushSubscriptionDoc {
+  _id: ObjectId;
+  userId: ObjectId;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  device: string;
+  createdAt: Date;
+}
+
+/** A reminder already sent, so the same one isn't sent again (expires on its own). */
+export interface PushLogDoc {
+  _id: string;
+  expiresAt: Date;
+}
+
+/** Writes one person made in a time window, for the write rate limit. */
+export interface RateLimitDoc {
+  _id: string;
+  n: number;
   expiresAt: Date;
 }
 
@@ -44,8 +80,18 @@ export interface BookDoc extends Timestamps {
   color: string;
   ownerId: ObjectId;
   isPersonal: boolean;
-  /** Order of the budget's sections; unset means the default (bills, spending, savings). */
+  /** Order of the three default sections, from before custom sections; superseded by `sections`. */
   groupOrder?: HeadGroup[];
+  /** The budget's sections, named and ordered by the family. Unset means the three defaults. */
+  sections?: BudgetSection[];
+  /** "Today" for the book; unset means Asia/Kolkata. */
+  timeZone?: string;
+  /** Budget month start day (salary day), 1–28; unset means 1. */
+  monthStartDay?: number;
+  /** en-IN (default), en-US or de-DE. */
+  numberLocale?: string;
+  /** Warn at this % of a spending budget; unset means 80. */
+  alertAt?: number;
   deletedAt?: Date;
 }
 
@@ -112,8 +158,13 @@ export interface CategoryDoc extends BookScoped {
   color: string;
   sort: number;
   archived: boolean;
-  /** Expense categories: how it's tracked as a budget head. Unset means "guess from the name". */
-  group?: HeadGroup;
+  /** Expense categories: the id of the budget section it's in (older data: the kind, which is also a default section's id). Unset means "guess from the name". */
+  group?: string;
+  /** The category it sits inside (one level only). */
+  parentId?: ObjectId;
+  /** Carry unspent money to the next month, counting from budget month `rolloverFrom`. */
+  rollover?: boolean;
+  rolloverFrom?: string;
   /** A personal head (allowance) belonging to this member. */
   memberId?: ObjectId;
   /** Savings heads: a target to save up to. */
@@ -132,6 +183,33 @@ export interface TransactionDoc extends BookScoped {
   clientId?: string;
   /** The monthly entry this was added from. */
   recurringId?: ObjectId;
+  /** Set on entries brought in from a spreadsheet, so a whole import can be undone. */
+  importId?: string;
+  tags?: string[];
+  /** The member it was for. */
+  forMember?: ObjectId;
+  /** The account it was paid from or received into. */
+  accountId?: ObjectId;
+}
+
+/** Where money is kept: cash, a bank account, a card, a wallet, a loan. */
+export interface AccountDoc extends BookScoped {
+  name: string;
+  kind: 'cash' | 'bank' | 'card' | 'wallet' | 'loan' | 'other';
+  /** Balance on openingDate, before that day's entries. Negative for money owed. */
+  openingBalance: number;
+  openingDate: string;
+  archived: boolean;
+  sort: number;
+}
+
+/** Money moved between two accounts; neither income nor spending. */
+export interface TransferDoc extends BookScoped {
+  fromAccountId: ObjectId;
+  toAccountId: ObjectId;
+  amount: number;
+  date: string;
+  note: string;
 }
 
 /** An income or expense that repeats every month on the same day. */
@@ -142,6 +220,10 @@ export interface RecurringDoc extends BookScoped {
   note: string;
   dayOfMonth: number;
   startMonth: string; // YYYY-MM
+  /** Every N months (unset: monthly). */
+  everyMonths?: number;
+  /** Last month it's due (unset: no end). */
+  endMonth?: string;
   active: boolean;
   /** Months the user chose not to add it. */
   skippedMonths: string[];
@@ -211,13 +293,19 @@ export async function collections() {
     transactions: db.collection<TransactionDoc>('transactions'),
     budgets: db.collection<BudgetDoc>('budgets'),
     recurring: db.collection<RecurringDoc>('recurring'),
+    passwordResets: db.collection<PasswordResetDoc>('passwordResets'),
+    accounts: db.collection<AccountDoc>('accounts'),
+    transfers: db.collection<TransferDoc>('transfers'),
+    rateLimits: db.collection<RateLimitDoc>('rateLimits'),
+    pushSubscriptions: db.collection<PushSubscriptionDoc>('pushSubscriptions'),
+    pushLog: db.collection<PushLogDoc>('pushLog'),
   };
 }
 
 export type Collections = Awaited<ReturnType<typeof collections>>;
 
 // Bump whenever the index list below changes, so the next cold start applies it.
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 6;
 
 /**
  * Creating ~25 indexes costs several round trips, and every serverless cold start would pay it before
@@ -270,6 +358,21 @@ async function createIndexes(db: Db) {
       { bookId: 1, recurringId: 1, date: 1 },
       { partialFilterExpression: { recurringId: { $type: 'objectId' } } },
     ),
+    db.collection('transactions').createIndex(
+      { bookId: 1, importId: 1 },
+      { partialFilterExpression: { importId: { $type: 'string' } } },
+    ),
+    db.collection('transactions').createIndex({ bookId: 1, tags: 1 }, { partialFilterExpression: { tags: { $exists: true } } }),
+    db.collection('passwordResets').createIndex({ tokenHash: 1 }, { unique: true }),
+    db.collection('passwordResets').createIndex({ userId: 1 }),
+    db.collection('passwordResets').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('transactions').createIndex({ bookId: 1, accountId: 1, date: -1 }, { partialFilterExpression: { accountId: { $exists: true } } }),
+    db.collection('accounts').createIndex({ bookId: 1, sort: 1 }),
+    db.collection('rateLimits').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('pushSubscriptions').createIndex({ endpoint: 1 }, { unique: true }),
+    db.collection('pushSubscriptions').createIndex({ userId: 1 }),
+    db.collection('pushLog').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
+    db.collection('transfers').createIndex({ bookId: 1, date: -1 }),
     db.collection('recurring').createIndex({ bookId: 1 }),
     db.collection('budgets').createIndex({ bookId: 1, month: 1 }, { unique: true }),
   ];

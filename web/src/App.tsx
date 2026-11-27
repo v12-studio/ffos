@@ -9,10 +9,14 @@ import { BookProvider, useBook } from './lib/book.tsx';
 // Overview is where the app opens, so it ships in the main bundle; every other screen loads on demand.
 import { HomePage } from './pages/HomePage.tsx';
 import {
+  AccountsPage,
+  BalancesPage,
   BudgetEditPage,
   BudgetPage,
   CategoriesPage,
   DeletedPage,
+  HelpPage,
+  ImportPage,
   InvitePage,
   LoginPage,
   MembersPage,
@@ -20,6 +24,8 @@ import {
   RecoverPage,
   RecoveryCodesScreen,
   RecurringPage,
+  ReportsPage,
+  ResetLinkPage,
   SetupPage,
   TransactionsPage,
 } from './pages/lazy.ts';
@@ -57,6 +63,7 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/recover" element={<RecoverPage />} />
+          <Route path="/reset/:token" element={<ResetLinkPage />} />
           <Route path="/invite/:token" element={<InvitePage />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
@@ -77,6 +84,7 @@ export function App() {
       <BookProvider>
         <Routes>
           <Route path="/invite/:token" element={<Lazy><InvitePage /></Lazy>} />
+          <Route path="/reset/:token" element={<Lazy><ResetLinkPage /></Lazy>} />
           <Route element={<BookGate />}>
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
@@ -88,6 +96,11 @@ export function App() {
               <Route path="more" element={<MorePage />} />
               <Route path="categories" element={<CategoriesPage />} />
               <Route path="recurring" element={<RecurringPage />} />
+              <Route path="import" element={<ImportPage />} />
+              <Route path="users" element={<AccountsPage />} />
+              <Route path="accounts" element={<BalancesPage />} />
+              <Route path="help" element={<HelpPage />} />
+              <Route path="reports" element={<ReportsPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

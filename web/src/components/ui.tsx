@@ -1,5 +1,5 @@
-import { ChevronRight, X, type LucideIcon } from 'lucide-react';
-import { useEffect, useId, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
+import { ChevronRight, Eye, EyeOff, X, type LucideIcon } from 'lucide-react';
+import { useEffect, useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { ROLE_LABELS, type Role } from '@ffos/shared';
 import { ApiError } from '../lib/api.ts';
@@ -45,12 +45,30 @@ export function Field({
   ...props
 }: InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string; hint?: string }) {
   const id = useId();
+  // Password fields get a show/hide button: easier than retyping on a phone keyboard.
+  const [shown, setShown] = useState(false);
+  const isPassword = props.type === 'password';
   return (
     <div className={className}>
       <label htmlFor={id} className="mb-1.5 block text-label font-medium">
         {label}
       </label>
-      <input id={id} {...props} aria-invalid={Boolean(error)} className={inputClass} />
+      {isPassword ? (
+        <div className="relative">
+          <input id={id} {...props} type={shown ? 'text' : 'password'} aria-invalid={Boolean(error)} className={`${inputClass} pr-11`} />
+          <button
+            type="button"
+            onClick={() => setShown((v) => !v)}
+            aria-label={shown ? 'Hide password' : 'Show password'}
+            aria-pressed={shown}
+            className="absolute top-1/2 right-1 grid size-9 -translate-y-1/2 place-items-center rounded-lg text-muted hover:text-ink"
+          >
+            {shown ? <EyeOff className="size-4.5" /> : <Eye className="size-4.5" />}
+          </button>
+        </div>
+      ) : (
+        <input id={id} {...props} aria-invalid={Boolean(error)} className={inputClass} />
+      )}
       {error ? (
         <p className="mt-1.5 text-label text-negative">{error}</p>
       ) : hint ? (

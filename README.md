@@ -58,8 +58,21 @@ as a function serving `/api/*`.
    `https://<github-user>.github.io/<repo>/`.
 4. On your phone, open that URL → browser menu → **Add to Home Screen / Install app**.
 
+### 4. Reminder notifications (optional)
+1. `npm run vapid-keys -w api` prints `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`.
+2. Add both to Netlify → Project configuration → Environment variables, then redeploy.
+3. The build also deploys a scheduled function, `reminders`, that runs daily at 09:00 India time. It sends
+   each person who turned notifications on (Settings → Notifications) one note per book about bills due
+   today or tomorrow and spending categories past the warn level. Each reminder is sent once.
+
+Without the keys, everything else works and the Notifications screen says notifications aren't set up.
+On iPhone, notifications need the app added to the home screen (iOS 16.4 or later).
+
 ## Security notes
 - Refresh tokens rotate on every use and are stored hashed; access tokens (15 min) live only in memory.
 - Every book route checks membership and role on each request, so a role change or removal applies immediately.
-- The refresh token is kept in `localStorage` so the installed app stays signed in. Anyone with access to the
-  unlocked phone has access to the app; an app-lock PIN/biometric is planned (PLAN.md phase 7).
+- The refresh token is kept in `localStorage` so the installed app stays signed in. Settings → App lock adds a
+  PIN or fingerprint/Face ID on each device.
+- Each person can make at most 600 changes per 10 minutes in a book (a guard against runaway scripts).
+- The person who set up the app can issue one-time password reset links (Settings → Users) and turn
+  sign-in off for an account. Everyone can download their data or delete their account (Settings → Your data).

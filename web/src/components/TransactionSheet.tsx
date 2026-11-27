@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronRight, CopyPlus, Delete, Repeat, Search, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Check, ChevronDown, ChevronRight, CopyPlus, Delete, Plus, Repeat, Search, SlidersHorizontal, Split, Star, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
@@ -10,13 +10,16 @@ import {
   type BudgetLineDTO,
   type CategoryDTO,
   type HeadGroup,
+  type TagDTO,
   type TransactionDTO,
 } from '@ffos/shared';
 import { api, ApiError } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
-import { leftLabel, lineStatus, sortByGroup, statusText, useBudget, useGroupOrder } from '../lib/budget.ts';
-import { currentMonth, monthLabel, todayISO } from '../lib/format.ts';
+import { leftLabel, limitOf, lineStatus, sortBySection, statusText, useBudget, useMembers, useSections } from '../lib/budget.ts';
+import { sameEntry, useFavourites } from '../lib/favourites.ts';
+import { lastAccountId, rememberAccount, useAccounts } from '../lib/accounts.ts';
+import { currentMonth, monthLabel, periodOfDate, todayISO } from '../lib/format.ts';
 import { enqueue, isNetworkError, newClientId } from '../lib/offline.ts';
 import { recentCategoryIds, rememberCategory } from '../lib/recent.ts';
 import { loadSnapshot, saveSnapshot } from '../lib/snapshot.ts';
@@ -73,6 +76,9 @@ export function TransactionSheet({
   const toast = useToast();
   const navigate = useNavigate();
   const categories = useCategories(book.id);
+  const { favourites, add: addFavourite, remove: removeFavourite } = useFavourites(book.id);
+  const accounts = useAccounts(book.id, open);
+  const liveAccounts = (accounts.data ?? []).filter((a) => !a.archived || a.id === accountId);
 
   const [type, setType] = useState<'expense' | 'income'>('expense');
   const [amount, setAmount] = useState('');
@@ -81,6 +87,13 @@ export function TransactionSheet({
   const [note, setNote] = useState('');
   const [newCategory, setNewCategory] = useState('');
   const [repeat, setRepeat] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagDraft, setTagDraft] = useState('');
+  const [forMemberId, setForMemberId] = useState<string | null>(null);
+  const [accountId, setAccountId] = useState<string | null>(null);
+  // Split: the rest of the amount goes to other categories; the chosen category gets what's left.
+  const [parts, setParts] = useState<{ categoryId: string; amount: string }[]>([]);
+  const [moreOpen, setMoreOpen] = useState(false);
   // "Add again" turns an open transaction into a new one with the same details.
   const [asNew, setAsNew] = useState(false);
   const [clientId, setClientId] = useState(newClientId);
@@ -112,6 +125,13 @@ export function TransactionSheet({
     setNote(initial?.note ?? prefill?.note ?? '');
     setNewCategory('');
     setRepeat(false);
+    setTags(initial?.tags ?? []);
+    setTagDraft('');
+    setForMemberId(initial?.forMemberId ?? null);
+    // New entries start on the account last used here; existing ones keep theirs.
+    setAccountId(initial ? initial.accountId : lastAccountId(book.id));
+    setParts([]);
+    setMoreOpen(Boolean(initial?.tags?.length || initial?.forMemberId));
     setAsNew(false);
     setView('form');
     setCategorySearch('');
@@ -135,13 +155,29 @@ export function TransactionSheet({
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['book', book.id] });
 
-  const newBody = () => ({ type, amount: toMinor(amount) ?? 0, date, categoryId, note, clientId, ...(repeat ? { repeatMonthly: true } : {}) });
+  // A tag still being typed counts when saving.
+  const allTags = () => (tagDraft.trim() ? [...tags, tagDraft.trim()] : tags).slice(0, 8);
+  const splitParts = () =>
+    parts.flatMap((p) => {
+      const minorPart = toMinor(p.amount) ?? 0;
+      return p.categoryId && minorPart > 0 ? [{ categoryId: p.categoryId, amount: minorPart }] : [];
+    });
+  const mainAmount = () => (toMinor(amount) ?? 0) - splitParts().reduce((s, p) => s + p.amount, 0);
+  // An account that's since been closed or deleted is dropped rather than failing the save.
+  const usableAccount = () => (accountId && accounts.data?.some((a) => a.id === accountId && !a.archived) ? accountId : undefined);
+  const extras = () => ({ tags: allTags(), forMemberId: forMemberId ?? undefined, accountId: usableAccount() });
+  const newBody = () => ({ type, amount: mainAmount(), date, categoryId, note, clientId, ...extras(), ...(repeat ? { repeatMonthly: true } : {}) });
+  // Each split part is its own entry with the same date, note, tags and person.
+  const partBodies = () => splitParts().map((p, i) => ({ type, amount: p.amount, date, categoryId: p.categoryId, note, clientId: `${clientId}-p${i + 1}`, ...extras() }));
   const save = useMutation({
-    mutationFn: () => {
-      const body = { type, amount: toMinor(amount) ?? 0, date, categoryId, note };
-      return transaction
-        ? api.patch<TransactionDTO>(`/books/${book.id}/transactions/${transaction.id}`, { ...body, version: transaction.version })
-        : api.post<TransactionDTO>(`/books/${book.id}/transactions`, newBody());
+    mutationFn: async () => {
+      if (transaction) {
+        const body = { type, amount: toMinor(amount) ?? 0, date, categoryId, note, tags: allTags(), forMemberId, accountId: usableAccount() ?? (initial?.accountId === accountId ? undefined : null) };
+        return api.patch<TransactionDTO>(`/books/${book.id}/transactions/${transaction.id}`, { ...body, version: transaction.version });
+      }
+      const main = await api.post<TransactionDTO>(`/books/${book.id}/transactions`, newBody());
+      for (const part of partBodies()) await api.post<TransactionDTO>(`/books/${book.id}/transactions`, part);
+      return main;
     },
     // Run even when the browser says it's offline (React Query would otherwise pause the save
     // indefinitely), so it fails fast and lands in the offline queue below.
@@ -149,13 +185,15 @@ export function TransactionSheet({
     // No connection: keep a new entry on this device and send it when the connection returns.
     onError: (err) => {
       if (transaction || !isNetworkError(err)) return;
-      enqueue({ bookId: book.id, body: newBody() });
+      // Already-saved parts are skipped by their clientId when the queue syncs.
+      for (const body of [newBody(), ...partBodies()]) enqueue({ bookId: book.id, body });
       rememberCategory(book.id, categoryId);
       onClose();
       toast({ message: "You're offline. Saved on this device; it will sync when you're back online.", duration: 5000 });
     },
     onSuccess: () => {
       rememberCategory(book.id, categoryId);
+      rememberAccount(book.id, usableAccount() ?? null);
       invalidate();
       onClose();
       // Going over a bill or spending head: offer to cover it from another head straight away.
@@ -196,13 +234,28 @@ export function TransactionSheet({
     },
   });
 
+  const members = useMembers(book.id, open && moreOpen && book.memberCount > 1);
+  const tagSuggestions = useQuery({
+    queryKey: ['book', book.id, 'tags'],
+    queryFn: () => api.get<TagDTO[]>(`/books/${book.id}/tags`),
+    enabled: open && moreOpen,
+    staleTime: 5 * 60_000,
+  });
+  const addTag = (raw: string) => {
+    const tag = raw.replace(/[,#]/g, '').trim().slice(0, 24);
+    if (tag && !tags.some((t) => t.toLowerCase() === tag.toLowerCase()) && tags.length < 8) setTags([...tags, tag]);
+    setTagDraft('');
+  };
+  const current = { type, amount: toMinor(amount) ?? 0, categoryId, note, tags };
+  const isFavourite = favourites.some((f) => sameEntry(f, current));
+
   const isEdit = Boolean(transaction);
   const canSave = isEdit
     ? canModifyRecord(book.role, 'update', transaction!.createdBy, user!.id)
     : can('txn.create');
   const canDelete = isEdit && canModifyRecord(book.role, 'delete', transaction!.createdBy, user!.id);
   const minor = toMinor(amount) ?? 0;
-  const budgetMonth = date.slice(0, 7);
+  const budgetMonth = periodOfDate(date);
   const budget = useBudget(book.id, budgetMonth, open && type === 'expense');
   const recent = useMemo(() => (open ? recentCategoryIds(book.id) : []), [open, book.id]);
   // This month's budget heads first (in plan order), then the ones this person used most
@@ -210,9 +263,9 @@ export function TransactionSheet({
   // A person's own allowance heads come first for them.
   const isMine = (id: string) => categories.data?.find((c) => c.id === id)?.memberId === user?.id;
   // Plan order is section by section, in the book's section order.
-  const groupOrder = useGroupOrder();
+  const sections = useSections();
   const headOrder = new Map(
-    sortByGroup(budget.data?.lines ?? [], groupOrder).map((l, i) => [l.categoryId, (isMine(l.categoryId) ? -500 : 0) + i]),
+    sortBySection(budget.data?.lines ?? [], sections).map((l, i) => [l.categoryId, (isMine(l.categoryId) ? -500 : 0) + i]),
   );
   const rank = (c: CategoryDTO) => {
     if (headOrder.has(c.id)) return headOrder.get(c.id)!;
@@ -257,7 +310,9 @@ export function TransactionSheet({
     setPage(selectedPage);
   }, [open, view, type, initial]);
   const searchText = categorySearch.trim().toLowerCase();
-  const matchesSearch = (c: CategoryDTO) => c.name.toLowerCase().includes(searchText);
+  const parentName = (c: CategoryDTO) => (c.parentId ? categories.data?.find((p) => p.id === c.parentId)?.name : undefined);
+  // Typing "groceries" also finds what's inside Groceries.
+  const matchesSearch = (c: CategoryDTO) => `${parentName(c) ?? ''} ${c.name}`.toLowerCase().includes(searchText);
   const categoryGroups: [string, CategoryDTO[]][] = (
     budgetOptions.length > 0
       ? ([
@@ -281,12 +336,14 @@ export function TransactionSheet({
     if (!line) return { name, inBudget: false as const, monthName: monthLabel(budgetMonth) };
     // When editing, the saved amount is already counted in `spent`; don't count it twice.
     const alreadyCounted =
-      transaction && transaction.type === 'expense' && transaction.categoryId === categoryId && transaction.date.slice(0, 7) === budgetMonth
+      transaction && transaction.type === 'expense' && transaction.categoryId === categoryId && periodOfDate(transaction.date) === budgetMonth
         ? transaction.amount
         : 0;
-    const leftBefore = line.planned - (line.spent - alreadyCounted);
-    return { name, inBudget: true as const, group: line.group, planned: line.planned, leftBefore, leftAfter: leftBefore - minor };
-  }, [budget.data, categoryId, selectedCategory?.name, budgetMonth, transaction, minor]);
+    const leftBefore = limitOf(line) - (line.spent - alreadyCounted);
+    // With a split, only the chosen category's share counts against it.
+    const share = parts.length ? Math.max(0, mainAmount()) : minor;
+    return { name, inBudget: true as const, group: line.group, planned: limitOf(line), leftBefore, leftAfter: leftBefore - share };
+  }, [budget.data, categoryId, selectedCategory?.name, budgetMonth, transaction, minor, parts]);
 
   const title = isEdit ? (canSave ? 'Edit transaction' : 'Transaction details') : 'New transaction';
 
@@ -358,6 +415,7 @@ export function TransactionSheet({
                   <CategoryOption
                     key={c.id}
                     category={c}
+                    parent={parentName(c)}
                     selected={categoryId === c.id}
                     disabled={!canSave}
                     onSelect={() => pickFromList(c)}
@@ -441,7 +499,7 @@ export function TransactionSheet({
                 </Button>
               )}
               {canSave && (
-                <Button className="flex-1" disabled={minor <= 0 || !categoryId || conflict} loading={save.isPending} onClick={() => save.mutate()}>
+                <Button className="flex-1" disabled={minor <= 0 || !categoryId || conflict || (parts.length > 0 && mainAmount() <= 0)} loading={save.isPending} onClick={() => save.mutate()}>
                   {isEdit ? 'Save changes' : type === 'income' ? 'Save income' : 'Save expense'}
                 </Button>
               )}
@@ -462,6 +520,31 @@ export function TransactionSheet({
               {!canSave && ' · read-only for your role'}
             </p>
           )}
+          {!isEdit && canSave && !amount && favourites.some((f) => f.type === type) && (
+            <div className="no-scrollbar -mx-5 mt-1 flex gap-1.5 overflow-x-auto px-5 pb-1" aria-label="Favourites">
+              {favourites
+                .filter((f) => f.type === type)
+                .map((f) => {
+                  const cat = categories.data?.find((c) => c.id === f.categoryId);
+                  if (!cat || cat.archived) return null;
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => {
+                        setAmount(String(f.amount / 100));
+                        setCategoryId(f.categoryId);
+                        setNote(f.note);
+                        setTags(f.tags);
+                      }}
+                      className="flex min-h-8 shrink-0 items-center gap-1 rounded-full border border-line bg-surface px-3 text-label whitespace-nowrap hover:bg-subtle"
+                    >
+                      <Star className="size-3 fill-current text-warning" />
+                      {f.note || cat.name} {formatMoney(f.amount, book.currency)}
+                    </button>
+                  );
+                })}
+            </div>
+          )}
           <div className="min-h-[18px]">
             {canSave && type === 'expense' && budgetCheck && <BudgetHint check={budgetCheck} currency={book.currency} />}
             {offerNewCategory && (
@@ -475,7 +558,7 @@ export function TransactionSheet({
         <div>
           <div className="mb-1.5 flex min-h-7 items-center justify-between gap-2">
             <p className="flex items-center gap-2 text-label font-medium">
-              {stripHeads ? 'Budget head' : 'Category'}
+              {stripHeads ? 'Budget category' : 'Category'}
               {pages.length > 1 && (
                 <span className="flex gap-1" aria-hidden>
                   {pages.map((_, i) => (
@@ -544,6 +627,19 @@ export function TransactionSheet({
             className={`${inputClass} min-w-0 flex-1`}
             aria-label="Note"
           />
+          {canSave && (
+            <button
+              onClick={() => setMoreOpen(!moreOpen)}
+              aria-expanded={moreOpen}
+              aria-label="More: tags, who it was for, split, favourite"
+              className={`relative grid size-11 shrink-0 place-items-center rounded-lg border transition-colors ${
+                moreOpen ? 'border-ink/30 bg-subtle text-ink' : 'border-line bg-surface text-muted hover:text-ink'
+              }`}
+            >
+              <SlidersHorizontal className="size-4" strokeWidth={1.75} />
+              {!moreOpen && (tags.length > 0 || forMemberId || parts.length > 0) && <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-primary" />}
+            </button>
+          )}
           {canSave && !transaction && (
             <button
               onClick={() => setRepeat(!repeat)}
@@ -562,6 +658,157 @@ export function TransactionSheet({
             Every month on the {ordinal(Number(date.slice(8, 10)))}
             {Number(date.slice(8, 10)) > 28 && ', or the last day in shorter months'}
           </p>
+        )}
+
+        {moreOpen && (
+          <div className="space-y-3 rounded-xl border border-line p-3">
+            <div>
+              <p className="mb-1.5 text-caption font-medium text-muted">Tags</p>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {tags.map((t) => (
+                  <span key={t} className="inline-flex min-h-8 items-center gap-1 rounded-full bg-subtle pr-1 pl-3 text-label">
+                    {t}
+                    {canSave && (
+                      <button onClick={() => setTags(tags.filter((x) => x !== t))} className="grid size-6 place-items-center rounded-full text-muted hover:text-ink" aria-label={`Remove tag ${t}`}>
+                        <X className="size-3.5" />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {canSave && tags.length < 8 && (
+                  <input
+                    value={tagDraft}
+                    onChange={(e) => (e.target.value.includes(',') ? addTag(e.target.value) : setTagDraft(e.target.value))}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        addTag(tagDraft);
+                      }
+                    }}
+                    onBlur={() => tagDraft.trim() && addTag(tagDraft)}
+                    list="tag-suggestions"
+                    placeholder={tags.length ? 'Add another' : 'e.g. trip, office, kids'}
+                    maxLength={24}
+                    aria-label="Add a tag"
+                    className="min-h-8 min-w-28 flex-1 rounded-full border border-dashed border-line bg-transparent px-3 text-label outline-none focus:border-accent"
+                  />
+                )}
+                <datalist id="tag-suggestions">
+                  {(tagSuggestions.data ?? [])
+                    .filter((t) => !tags.some((x) => x.toLowerCase() === t.tag.toLowerCase()))
+                    .slice(0, 30)
+                    .map((t) => (
+                      <option key={t.tag} value={t.tag} />
+                    ))}
+                </datalist>
+              </div>
+            </div>
+
+            {liveAccounts.length > 0 && (
+              <div>
+                <p className="mb-1.5 text-caption font-medium text-muted">{type === 'income' ? 'Received into' : 'Paid from'}</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {[{ id: null as string | null, name: 'No account' }, ...liveAccounts].map((a) => (
+                    <button
+                      key={a.id ?? 'none'}
+                      disabled={!canSave}
+                      onClick={() => setAccountId(a.id)}
+                      aria-pressed={accountId === a.id}
+                      className={`min-h-8 rounded-full border px-3 text-label ${accountId === a.id ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface'}`}
+                    >
+                      {a.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {book.memberCount > 1 && (
+              <div>
+                <p className="mb-1.5 text-caption font-medium text-muted">For</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {[{ userId: null as string | null, name: 'Everyone' }, ...(members.data ?? [])].map((m) => (
+                    <button
+                      key={m.userId ?? 'all'}
+                      disabled={!canSave}
+                      onClick={() => setForMemberId(m.userId)}
+                      aria-pressed={forMemberId === m.userId}
+                      className={`min-h-8 rounded-full border px-3 text-label ${forMemberId === m.userId ? 'border-primary bg-primary text-primary-fg' : 'border-line bg-surface'}`}
+                    >
+                      {m.userId === null ? m.name : m.name.split(' ')[0]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {canSave && !transaction && (
+              <div>
+                <p className="mb-1.5 flex items-center justify-between text-caption font-medium text-muted">
+                  <span>Split across categories</span>
+                  {parts.length > 0 && (
+                    <span className={`tabular ${mainAmount() < 0 ? 'text-negative' : ''}`}>
+                      {selectedCategory?.name ?? 'Chosen category'}: {formatMoney(Math.max(0, mainAmount()), book.currency)}
+                    </span>
+                  )}
+                </p>
+                <div className="space-y-1.5">
+                  {parts.map((p, i) => (
+                    <div key={i} className="flex gap-1.5">
+                      <select
+                        value={p.categoryId}
+                        onChange={(e) => setParts(parts.map((x, j) => (j === i ? { ...x, categoryId: e.target.value } : x)))}
+                        className={`${inputClass} min-h-10 min-w-0 flex-1`}
+                        aria-label={`Category for part ${i + 2}`}
+                      >
+                        <option value="">Category…</option>
+                        {options.filter((c) => c.id !== categoryId).map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        inputMode="decimal"
+                        value={p.amount}
+                        onChange={(e) => setParts(parts.map((x, j) => (j === i ? { ...x, amount: e.target.value.replace(/[^\d.,]/g, '') } : x)))}
+                        placeholder="0"
+                        className={`${inputClass} min-h-10 w-24 text-right tabular`}
+                        aria-label={`Amount for part ${i + 2}`}
+                      />
+                      <button onClick={() => setParts(parts.filter((_, j) => j !== i))} className="grid size-10 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle" aria-label="Remove part">
+                        <X className="size-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => setParts([...parts, { categoryId: '', amount: '' }])}
+                    disabled={parts.length >= 5}
+                    className="flex min-h-9 items-center gap-1.5 text-label font-medium text-accent disabled:opacity-50"
+                  >
+                    {parts.length ? <Plus className="size-3.5" /> : <Split className="size-3.5" />} {parts.length ? 'Add another part' : 'Split this amount'}
+                  </button>
+                  {parts.length > 0 && (
+                    <p className="text-caption text-muted">
+                      {mainAmount() < 0 ? 'The parts add up to more than the total.' : `Saved as ${splitParts().length + 1} entries with the same date, note and tags.`}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {canSave && (current.amount > 0 && categoryId ? (
+              <button
+                onClick={() => (isFavourite ? removeFavourite(current) : addFavourite(current))}
+                aria-pressed={isFavourite}
+                className="flex min-h-9 items-center gap-1.5 text-label font-medium text-accent"
+              >
+                <Star className={`size-4 ${isFavourite ? 'fill-current' : ''}`} /> {isFavourite ? 'Saved as a favourite · remove' : 'Save as a favourite'}
+              </button>
+            ) : (
+              <p className="text-caption text-muted">Enter an amount and category to save it as a favourite for one-tap adding.</p>
+            ))}
+          </div>
         )}
 
         {canSave && (
@@ -627,6 +874,7 @@ function CategoryOption({
   onSelect,
   line,
   currency,
+  parent,
 }: {
   category: CategoryDTO;
   selected: boolean;
@@ -634,6 +882,8 @@ function CategoryOption({
   onSelect: () => void;
   line?: BudgetLineDTO;
   currency: string;
+  /** The category it sits inside, shown before its name. */
+  parent?: string;
 }) {
   return (
     <button
@@ -643,7 +893,10 @@ function CategoryOption({
       className="flex min-h-12 w-full items-center gap-3 border-b border-line px-3 text-left text-body last:border-b-0 hover:bg-subtle"
     >
       <CategoryTile category={category} size="sm" />
-      <span className="min-w-0 flex-1 truncate">{category.name}</span>
+      <span className="min-w-0 flex-1 truncate">
+        {parent && <span className="text-muted">{parent} › </span>}
+        {category.name}
+      </span>
       {line && <span className={`shrink-0 text-label tabular ${leftTone(line)}`}>{leftLabel(line, currency)}</span>}
       {selected && <Check className="size-4 shrink-0 text-accent" />}
     </button>
@@ -673,7 +926,7 @@ type BudgetCheck =
 function BudgetHint({ check, currency }: { check: BudgetCheck; currency: string }) {
   const money = (n: number) => formatMoney(n, currency);
   if (!check.inBudget) {
-    return <p className="text-label text-muted">{check.name} isn't a budget head in {check.monthName}.</p>;
+    return <p className="text-label text-muted">{check.name} isn't in the {check.monthName} budget.</p>;
   }
   if (check.group === 'savings') {
     return (

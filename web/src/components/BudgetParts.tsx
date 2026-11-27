@@ -17,15 +17,17 @@ import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
 import {
   leftLabel,
+  limitOf,
   lineStatus,
   movedLines,
   shortDay,
   statusBar,
   statusText,
   useMembers,
-  useGroupOrder,
+  sectionIdOf,
   usePayBill,
   useSavePlan,
+  useSections,
   useUpdateHead,
   usedPct,
   type LineStatus,
@@ -119,7 +121,7 @@ export function HeadRow({
           tone={line.group === 'savings' ? (status === 'done' ? 'bg-positive' : 'bg-positive/70') : statusBar[status]}
           today={line.group === 'spending' ? today : undefined}
         />
-        <span className={`w-20 shrink-0 text-right text-caption tabular ${statusText[status]}`}>of {money(line.planned)}</span>
+        <span className={`w-20 shrink-0 text-right text-caption tabular ${statusText[status]}`}>of {money(limitOf(line))}</span>
       </span>
     );
   }
@@ -202,6 +204,7 @@ export function HeadSheet({
   const toast = useToast();
   const openTransaction = useOpenTransaction();
   const categories = useCategories(book.id);
+  const sections = useSections();
   const pay = usePayBill(book.id, month);
   const txns = useQuery({
     queryKey: ['book', book.id, 'transactions', month],
@@ -213,11 +216,11 @@ export function HeadSheet({
   const rows = (txns.data ?? []).filter((t) => t.categoryId === categoryId && t.type === 'expense');
   const line = budget?.lines.find((l) => l.categoryId === categoryId);
   const money = (n: number) => formatMoney(n, book.currency);
-  const name = category?.name ?? 'this head';
+  const name = category?.name ?? 'this category';
   const status = line ? lineStatus(line, budget?.today) : null;
   const canPlan = can('budget.manage');
   const canAdd = can('txn.create');
-  const remaining = line ? line.planned - line.spent : 0;
+  const remaining = line ? limitOf(line) - line.spent : 0;
 
   const markPaid = () => {
     if (!line) return;
@@ -268,11 +271,15 @@ export function HeadSheet({
     <Sheet
       open
       onClose={onClose}
-      title={category?.name ?? 'Budget head'}
+      title={category?.name ?? 'Budget category'}
       heading={
         <span className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-body font-semibold">{category?.name ?? 'Budget head'}</span>
-          {category && <span className="shrink-0 rounded-md bg-subtle px-1.5 py-0.5 text-caption text-muted">{HEAD_GROUP_LABELS[category.group].name}</span>}
+          <span className="truncate text-body font-semibold">{category?.name ?? 'Budget category'}</span>
+          {category && (
+            <span className="shrink-0 rounded-md bg-subtle px-1.5 py-0.5 text-caption text-muted">
+              {sections.find((s) => s.id === sectionIdOf(category, sections))?.name}
+            </span>
+          )}
         </span>
       }
     >
@@ -282,7 +289,13 @@ export function HeadSheet({
             {leftLabel(line, book.currency)}
           </p>
           <p className="text-label text-muted tabular">
-            {line.group === 'savings' ? 'Put aside' : line.group === 'bills' ? 'Paid' : 'Spent'} {money(line.spent)} of {money(line.planned)}
+            {line.group === 'savings' ? 'Put aside' : line.group === 'bills' ? 'Paid' : 'Spent'} {money(line.spent)} of {money(limitOf(line))}
+            {line.rolloverIn !== 0 && line.rolloverIn !== undefined && (
+              <span>
+                {' '}
+                ({money(line.planned)} planned {line.rolloverIn > 0 ? `+ ${money(line.rolloverIn)} carried over` : `− ${money(-line.rolloverIn)} overspent last month`})
+              </span>
+            )}
             {line.due && !line.due.paid && ` · due ${shortDay(line.due.date, todayISO())}`}
           </p>
           {status === 'fast' && budget?.today && (
@@ -308,7 +321,7 @@ export function HeadSheet({
       )}
       {!line && (
         <p className="mb-4 text-label text-muted">
-          Not in the {monthLabel(month)} plan.{canPlan && ' Add it as a head to track it.'}
+          Not in the {monthLabel(month)} plan.{canPlan && ' Add it to the plan to track it.'}
         </p>
       )}
 
@@ -316,9 +329,9 @@ export function HeadSheet({
         <div className="mb-4 flex flex-wrap gap-2">
           {actions}
           {canPlan && (
-            <Button variant="secondary" onClick={() => onSettings(categoryId)} aria-label={`${name} settings`} title="Head settings">
+            <Button variant="secondary" onClick={() => onSettings(categoryId)} aria-label={`${name} settings`} title="Budget settings">
               <Settings2 className="size-4" />
-              {actions.length === 0 && 'Head settings'}
+              {actions.length === 0 && 'Budget settings'}
             </Button>
           )}
         </div>
@@ -382,7 +395,7 @@ export function MoveMoneySheet({ month, budget, categoryId, onClose }: { month: 
     if (!categoryId || !budget) return;
     save.reset();
     const target = budget.lines.find((l) => l.categoryId === categoryId);
-    const over = target ? Math.max(0, target.spent - target.planned) : 0;
+    const over = target ? Math.max(0, target.spent - limitOf(target)) : 0;
     const best = budget.lines
       .filter((l) => l.categoryId !== categoryId && l.group === 'spending' && l.remaining > 0)
       .sort((a, b) => b.remaining - a.remaining)[0];
@@ -396,7 +409,7 @@ export function MoveMoneySheet({ month, budget, categoryId, onClose }: { month: 
   const source = budget.lines.find((l) => l.categoryId === from);
   const available = from === UNASSIGNED ? Math.max(0, budget.totals.unallocated) : (source?.planned ?? 0);
   const tooMuch = minor !== null && minor > available && from !== UNASSIGNED;
-  const sourceGoesOver = source && minor !== null && source.planned - minor < source.spent;
+  const sourceGoesOver = source && minor !== null && limitOf(source) - minor < source.spent;
   const conflict = save.error instanceof ApiError && save.error.status === 409;
 
   const option = (id: string) => {
@@ -492,11 +505,12 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
   const categories = useCategories(book.id);
   const members = useMembers(book.id, categoryId !== null && book.memberCount > 1);
   const update = useUpdateHead(book.id);
-  const groupOrder = useGroupOrder();
+  const sections = useSections();
   const category = categories.data?.find((c) => c.id === categoryId);
-  const [group, setGroup] = useState<HeadGroup>('spending');
+  const [sectionId, setSectionId] = useState('spending');
   const [memberId, setMemberId] = useState('');
   const [hasGoal, setHasGoal] = useState(false);
+  const [rollover, setRollover] = useState(false);
   const [target, setTarget] = useState('');
   const [by, setBy] = useState('');
   const [start, setStart] = useState('');
@@ -504,15 +518,18 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
   useEffect(() => {
     if (!category) return;
     update.reset();
-    setGroup(category.group);
+    setSectionId(sectionIdOf(category, sections));
     setMemberId(category.memberId ?? '');
     setHasGoal(category.goal !== null);
+    setRollover(category.rollover);
     setTarget(minorToInput(category.goal?.target ?? 0));
     setBy(category.goal?.by ?? '');
     setStart(minorToInput(category.goal?.start ?? 0));
   }, [categoryId, category?.id]);
 
   if (!categoryId || !category) return null;
+  const section = sections.find((s) => s.id === sectionId) ?? sections[0]!;
+  const group: HeadGroup = section.kind;
   const targetMinor = toMinor(target || '0');
   const startMinor = toMinor(start || '0');
   const goalInvalid = group === 'savings' && hasGoal && (!targetMinor || targetMinor <= 0 || startMinor === null);
@@ -523,9 +540,10 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
     update.mutate(
       {
         id: category.id,
-        ...(group !== category.group ? { group } : {}),
+        ...(section.id !== sectionIdOf(category, sections) ? { section: section.id } : {}),
         ...((memberId || null) !== category.memberId ? { memberId: memberId || null } : {}),
         ...(goal !== undefined ? { goal } : {}),
+        ...(group === 'spending' && rollover !== category.rollover ? { rollover } : {}),
       },
       {
         onSuccess: () => {
@@ -552,9 +570,22 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
     >
       <div className="space-y-5">
         <div>
-          <p className="mb-1.5 text-label font-medium">What kind of head is {category.name}?</p>
-          <Segmented value={group} onChange={setGroup} options={groupOrder.map((g) => ({ value: g, label: HEAD_GROUP_LABELS[g].name }))} />
-          <p className="mt-1.5 text-caption text-muted">{HEAD_GROUP_LABELS[group].description}</p>
+          <p className="mb-1.5 text-label font-medium">Which section is {category.name} in?</p>
+          {sections.length <= 3 ? (
+            <Segmented value={section.id} onChange={setSectionId} options={sections.map((s) => ({ value: s.id, label: s.name }))} />
+          ) : (
+            <select value={section.id} onChange={(e) => setSectionId(e.target.value)} className={inputClass} aria-label="Section">
+              {sections.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <p className="mt-1.5 text-caption text-muted">
+            {sections.filter((s) => s.kind === group).length > 1 || section.name !== HEAD_GROUP_LABELS[group].name ? `Tracked like ${HEAD_GROUP_LABELS[group].name.toLowerCase()}. ` : ''}
+            {HEAD_GROUP_LABELS[group].description}
+          </p>
         </div>
 
         {book.memberCount > 1 && (
@@ -570,6 +601,18 @@ export function HeadSettingsSheet({ categoryId, onClose }: { categoryId: string 
               ))}
             </select>
             <span className="mt-1.5 block text-caption text-muted">A personal allowance shows first for that person and on their Overview.</span>
+          </label>
+        )}
+
+        {group === 'spending' && (
+          <label className="flex min-h-11 items-start justify-between gap-3">
+            <span>
+              <span className="block text-label font-medium">Carry over to next month</span>
+              <span className="block text-caption text-muted">
+                What's left at the end of the month is added to next month's {category.name} budget; going over takes it off. Counts from this month.
+              </span>
+            </span>
+            <input type="checkbox" checked={rollover} onChange={(e) => setRollover(e.target.checked)} className="mt-1 size-5 shrink-0 accent-[var(--app-primary)]" />
           </label>
         )}
 

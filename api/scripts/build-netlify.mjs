@@ -9,7 +9,8 @@ const outdir = `${root}netlify/functions`;
 
 await rm(outdir, { recursive: true, force: true });
 await build({
-  entryPoints: { api: `${root}netlify/entry.ts` },
+  // The API, and the daily reminder run (a scheduled function).
+  entryPoints: { api: `${root}netlify/entry.ts`, reminders: `${root}netlify/reminders.ts` },
   outdir,
   outExtension: { '.js': '.mjs' },
   bundle: true,

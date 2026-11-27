@@ -20,8 +20,9 @@
   --app-chart-expense: #b42318;
 }
 
+/* Dark: follows the phone unless the person picked Light or Dark in Settings → Appearance (data-theme). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --app-canvas: #0b0c0e;
     --app-surface: #131519;
     --app-subtle: #1b1e23;
@@ -37,6 +38,110 @@
     --app-chart-income: #0d9488;
     --app-chart-expense: #e5484d;
   }
+}
+:root[data-theme='dark'] {
+  --app-canvas: #0b0c0e;
+  --app-surface: #131519;
+  --app-subtle: #1b1e23;
+  --app-line: #272b32;
+  --app-ink: #f3f4f6;
+  --app-muted: #9ca3af;
+  --app-primary: #74c69d;
+  --app-primary-fg: #0b1f17;
+  --app-accent: #95d5b2;
+  --app-positive: #34d399;
+  --app-negative: #f87171;
+  --app-warning: #fbbf24;
+  --app-chart-income: #0d9488;
+  --app-chart-expense: #e5484d;
+}
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+/* Accent colour (Settings → Appearance). Green is the default above; each has a light and a dark shade. */
+:root[data-accent='blue'] {
+  --app-primary: #1e3a8a;
+  --app-accent: #1d4ed8;
+}
+:root[data-accent='purple'] {
+  --app-primary: #4c1d95;
+  --app-accent: #6d28d9;
+}
+:root[data-accent='teal'] {
+  --app-primary: #134e4a;
+  --app-accent: #0f766e;
+}
+:root[data-accent='orange'] {
+  --app-primary: #7c2d12;
+  --app-accent: #c2410c;
+}
+:root[data-accent='rose'] {
+  --app-primary: #881337;
+  --app-accent: #be123c;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-accent='blue']:not([data-theme='light']) {
+    --app-primary: #93c5fd;
+    --app-primary-fg: #0b1a33;
+    --app-accent: #bfdbfe;
+  }
+  :root[data-accent='purple']:not([data-theme='light']) {
+    --app-primary: #c4b5fd;
+    --app-primary-fg: #1e1236;
+    --app-accent: #ddd6fe;
+  }
+  :root[data-accent='teal']:not([data-theme='light']) {
+    --app-primary: #5eead4;
+    --app-primary-fg: #062a27;
+    --app-accent: #99f6e4;
+  }
+  :root[data-accent='orange']:not([data-theme='light']) {
+    --app-primary: #fdba74;
+    --app-primary-fg: #2a1205;
+    --app-accent: #fed7aa;
+  }
+  :root[data-accent='rose']:not([data-theme='light']) {
+    --app-primary: #fda4af;
+    --app-primary-fg: #2b0710;
+    --app-accent: #fecdd3;
+  }
+}
+:root[data-theme='dark'][data-accent='blue'] {
+  --app-primary: #93c5fd;
+  --app-primary-fg: #0b1a33;
+  --app-accent: #bfdbfe;
+}
+:root[data-theme='dark'][data-accent='purple'] {
+  --app-primary: #c4b5fd;
+  --app-primary-fg: #1e1236;
+  --app-accent: #ddd6fe;
+}
+:root[data-theme='dark'][data-accent='teal'] {
+  --app-primary: #5eead4;
+  --app-primary-fg: #062a27;
+  --app-accent: #99f6e4;
+}
+:root[data-theme='dark'][data-accent='orange'] {
+  --app-primary: #fdba74;
+  --app-primary-fg: #2a1205;
+  --app-accent: #fed7aa;
+}
+:root[data-theme='dark'][data-accent='rose'] {
+  --app-primary: #fda4af;
+  --app-primary-fg: #2b0710;
+  --app-accent: #fecdd3;
+}
+
+/* Text size (Settings → Appearance). Sizes and spacing are in rem, so the whole layout scales. */
+:root[data-text='large'] {
+  font-size: 112.5%;
+}
+:root[data-text='larger'] {
+  font-size: 125%;
 }
 
 @theme inline {

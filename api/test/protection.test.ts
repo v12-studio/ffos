@@ -145,8 +145,8 @@ describe('export', () => {
     expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]); // UTF-8 BOM for Excel
     const text = new TextDecoder().decode(bytes); // strips the BOM
     const lines = text.trim().split('\r\n');
-    expect(lines[0]).toBe('Date,Type,Category,Section,Amount,Currency,Note,Added by,Added at');
-    expect(lines[1]).toContain('420.00,INR,"Dinner, with ""friends""",Owner');
+    expect(lines[0]).toBe('Date,Type,Category,Section,Amount,Currency,Note,Tags,For,Account,Added by,Added at');
+    expect(lines[1]).toContain('420.00,INR,"Dinner, with ""friends""",,,,Owner');
     expect(lines[2]).toContain(`"'=HYPERLINK(""http://x"")"`);
   });
 });
@@ -156,3 +156,21 @@ async function fetchRaw(path: string, token: string) {
   const { createApp } = await import('../src/app.ts');
   return createApp().request(`/api/v1${path}`, { headers: { authorization: `Bearer ${token}` } });
 }
+
+describe('write rate limit', () => {
+  it('answers 429 once someone makes too many changes in a short time', async () => {
+    const { WRITE_LIMIT } = await import('../src/middleware/auth.ts');
+    const { collections } = await import('../src/db.ts');
+    // Pretend this person already made the maximum number of writes in this window.
+    const window = Math.floor(Date.now() / WRITE_LIMIT.windowMs);
+    await (await collections()).rateLimits.insertOne({ _id: `w:${m.editor.user.id}:${window}`, n: WRITE_LIMIT.max, expiresAt: new Date(Date.now() + 3600_000) });
+    const res = await api('POST', `/books/${bookId}/transactions`, {
+      token: m.editor.accessToken,
+      body: { type: 'expense', amount: 100, date: '2026-09-15', categoryId, note: '' },
+    });
+    expect(res.status).toBe(429);
+    // Reading still works, and other people aren't affected.
+    expect((await api('GET', `/books/${bookId}/transactions?month=2026-09`, { token: m.editor.accessToken })).status).toBe(200);
+    expect((await add(owner.accessToken)).id).toBeTruthy();
+  });
+});

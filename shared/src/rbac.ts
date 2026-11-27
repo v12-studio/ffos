@@ -21,6 +21,7 @@ export const PERMISSIONS = [
   'members.invite',
   'members.manage',
   'book.export',
+  'book.import',
   'book.settings',
   'activity.view',
   'book.delete',
@@ -37,6 +38,7 @@ const EDITOR: Permission[] = [
   'plan.manage',
   'budget.manage',
   'book.export',
+  'book.import',
   'activity.view',
 ];
 const ADMIN: Permission[] = [...EDITOR, 'setup.manage', 'members.invite', 'members.manage', 'book.settings'];

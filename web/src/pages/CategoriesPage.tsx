@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowDown, ArrowUp, Check, EyeOff, Plus, Tags } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { Check, EyeOff, Merge, Plus, Tags, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 import { isCatchAllCategory, type CategoryDTO } from '@ffos/shared';
 import { PageTitle } from '../components/AppShell.tsx';
 import { CATEGORY_COLORS, CategoryTile, ICON_KEYS, iconFor } from '../components/CategoryIcon.tsx';
+import { useConfirm } from '../components/Confirm.tsx';
 import { useCategories } from '../components/TransactionSheet.tsx';
+import { DragHandle, moveItem, SortableList } from '../components/Sortable.tsx';
 import { useToast } from '../components/Toast.tsx';
-import { Button, Card, EmptyState, ErrorBanner, Field, fieldErrors, PageSkeleton, SectionTitle, Segmented, Sheet } from '../components/ui.tsx';
+import { Button, Card, EmptyState, ErrorBanner, Field, fieldErrors, inputClass, PageSkeleton, SectionTitle, Segmented, Sheet } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
 
@@ -24,6 +26,13 @@ export function CategoriesPage() {
 
   const all = categories.data ?? [];
   const live = all.filter((c) => c.kind === kind && !c.archived);
+  // Sub-categories are listed under their parent; one whose parent is hidden shows at the top level.
+  const liveIds = new Set(live.map((c) => c.id));
+  const tops = live.filter((c) => !c.parentId || !liveIds.has(c.parentId));
+  const childrenOf = (id: string) => live.filter((c) => c.parentId === id);
+  /** Every live id in display order, optionally with one parent's children in a new order. */
+  const flatten = (order: CategoryDTO[], parent?: string, kids?: CategoryDTO[]) =>
+    order.flatMap((t) => [t.id, ...(t.id === parent && kids ? kids : childrenOf(t.id)).map((k) => k.id)]);
   const hidden = all.filter((c) => c.kind === kind && c.archived);
 
   const reorder = useMutation({
@@ -49,12 +58,7 @@ export function CategoriesPage() {
     },
   });
 
-  const move = (index: number, delta: number) => {
-    const ids = live.map((c) => c.id);
-    const [id] = ids.splice(index, 1);
-    ids.splice(index + delta, 0, id!);
-    reorder.mutate(ids);
-  };
+
 
   return (
     <div className="space-y-6">
@@ -94,36 +98,58 @@ export function CategoriesPage() {
                 <EmptyState icon={<Tags className="size-5" />} title="No categories" />
               </Card>
             ) : (
-              <Card className="divide-y divide-line overflow-hidden">
-                {live.map((c, i) => (
-                  <div key={c.id} className="flex min-h-14 items-center gap-1 pr-2">
-                    <button
-                      onClick={() => canManage && setEditing(c)}
-                      disabled={!canManage}
-                      className="flex min-h-14 min-w-0 flex-1 items-center gap-3 px-4 text-left hover:bg-subtle/60 disabled:hover:bg-transparent"
-                    >
-                      <CategoryTile category={c} />
-                      <span className="min-w-0 flex-1 truncate text-body font-medium">{c.name}</span>
-                    </button>
-                    {canManage && (
-                      <>
-                        <IconButton label={`Move ${c.name} up`} disabled={i === 0 || reorder.isPending} onClick={() => move(i, -1)}>
-                          <ArrowUp className="size-4" />
-                        </IconButton>
-                        <IconButton
-                          label={`Move ${c.name} down`}
-                          disabled={i === live.length - 1 || reorder.isPending}
-                          onClick={() => move(i, 1)}
-                        >
-                          <ArrowDown className="size-4" />
-                        </IconButton>
-                      </>
-                    )}
-                  </div>
-                ))}
+              <Card className="overflow-hidden">
+                <SortableList
+                  className="divide-y divide-line"
+                  items={tops}
+                  keyOf={(c) => c.id}
+                  onMove={(from, to) => reorder.mutate(flatten(moveItem(tops, from, to)))}
+                  renderItem={(c, handle) => {
+                    const kids = childrenOf(c.id);
+                    return (
+                      <div>
+                        <div className={`flex min-h-14 items-center gap-1 ${canManage ? 'pl-3' : ''}`}>
+                          {canManage && <DragHandle handle={handle} label={c.name} />}
+                          <button
+                            onClick={() => canManage && setEditing(c)}
+                            disabled={!canManage}
+                            className="flex min-h-14 min-w-0 flex-1 items-center gap-3 px-3 text-left hover:bg-subtle/60 disabled:hover:bg-transparent"
+                          >
+                            <CategoryTile category={c} />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-body font-medium">{c.name}</span>
+                              {kids.length > 0 && <span className="block text-caption text-muted">{kids.length} inside</span>}
+                            </span>
+                          </button>
+                        </div>
+                        {kids.length > 0 && (
+                          <SortableList
+                            className="divide-y divide-line border-t border-line bg-subtle/30"
+                            items={kids}
+                            keyOf={(k) => k.id}
+                            onMove={(from, to) => reorder.mutate(flatten(tops, c.id, moveItem(kids, from, to)))}
+                            renderItem={(k, kidHandle) => (
+                              <div className={`flex min-h-12 items-center gap-1 pl-10 ${canManage ? '' : 'pl-12'}`}>
+                                {canManage && <DragHandle handle={kidHandle} label={k.name} />}
+                                <button
+                                  onClick={() => canManage && setEditing(k)}
+                                  disabled={!canManage}
+                                  className="flex min-h-12 min-w-0 flex-1 items-center gap-3 px-3 text-left hover:bg-subtle/60 disabled:hover:bg-transparent"
+                                >
+                                  <CategoryTile category={k} size="sm" />
+                                  <span className="min-w-0 flex-1 truncate text-body">{k.name}</span>
+                                </button>
+                              </div>
+                            )}
+                          />
+                        )}
+                      </div>
+                    );
+                  }}
+                />
               </Card>
             )}
-            <p className="mt-2 px-0.5 text-label text-muted">This is the order they appear in when adding an entry.</p>
+            <p className="mt-2 px-0.5 text-label text-muted">{canManage ? 'Hold ⠿ and drag to reorder. ' : ''}This is the order they appear in when adding an entry.</p>
           </section>
 
           {hidden.length > 0 && (
@@ -158,25 +184,14 @@ export function CategoriesPage() {
   );
 }
 
-function IconButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      aria-label={label}
-      className="grid size-10 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle hover:text-ink disabled:opacity-30 disabled:hover:bg-transparent"
-    >
-      {children}
-    </button>
-  );
-}
-
 function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new' | null; kind: Kind; onClose: () => void }) {
   const { book } = useCurrentBook();
+  const allCategories = useCategories(book.id);
   const queryClient = useQueryClient();
   const toast = useToast();
   const existing = editing && editing !== 'new' ? editing : null;
   const [form, setForm] = useState({
+    parentId: existing?.parentId ?? '',
     name: existing?.name ?? '',
     icon: existing?.icon && ICON_KEYS.includes(existing.icon) ? existing.icon : 'tag',
     color: existing?.color ?? CATEGORY_COLORS[0]!,
@@ -192,8 +207,15 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
             ...(isCatchAllCategory(existing) ? {} : { name: form.name }),
             icon: form.icon,
             color: form.color,
+            ...((form.parentId || null) !== existing.parentId ? { parentId: form.parentId || null } : {}),
           })
-        : api.post<CategoryDTO>(`/books/${book.id}/categories`, { ...form, kind }),
+        : api.post<CategoryDTO>(`/books/${book.id}/categories`, {
+            name: form.name,
+            icon: form.icon,
+            color: form.color,
+            kind,
+            ...(form.parentId ? { parentId: form.parentId } : {}),
+          }),
     onSuccess: done,
   });
   const hide = useMutation({
@@ -203,9 +225,30 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
       done();
     },
   });
+  const confirm = useConfirm();
+  const [mergeInto, setMergeInto] = useState('');
+  const merge = useMutation({
+    mutationFn: () => api.post<{ moved: number }>(`/books/${book.id}/categories/${existing!.id}/merge`, { into: mergeInto }),
+    onSuccess: (res) => {
+      // Entries, budgets and repeating entries all changed.
+      queryClient.invalidateQueries({ queryKey: ['book', book.id] });
+      toast({ message: `Merged: ${res.moved} transaction${res.moved === 1 ? '' : 's'} moved`, duration: 3000 });
+      onClose();
+    },
+  });
+  const remove = useMutation({
+    mutationFn: () => api.del(`/books/${book.id}/categories/${existing!.id}`),
+    onSuccess: () => {
+      toast({ message: `${existing!.name} deleted`, duration: 2500 });
+      done();
+    },
+  });
+  const hasKids = existing ? (allCategories.data ?? []).some((c) => c.parentId === existing.id) : false;
+  const parentChoices = (allCategories.data ?? []).filter((c) => c.kind === kind && !c.archived && !c.parentId && c.id !== existing?.id && !isCatchAllCategory(c));
+  const mergeTargets = (allCategories.data ?? []).filter((c) => existing && c.kind === existing.kind && c.id !== existing.id && !c.archived);
   const errors = fieldErrors(save.error);
   const locked = existing ? isCatchAllCategory(existing) : false;
-  const preview: CategoryDTO = { id: 'preview', name: form.name, kind, icon: form.icon, color: form.color, archived: false, group: 'spending', memberId: null, goal: null };
+  const preview: CategoryDTO = { id: 'preview', name: form.name, kind, icon: form.icon, color: form.color, archived: false, group: 'spending', section: 'spending', memberId: null, goal: null, rollover: false, parentId: null };
 
   return (
     <Sheet open={editing !== null} onClose={onClose} title={existing ? `Edit ${existing.name}` : `New ${kind} category`}>
@@ -230,6 +273,28 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
             autoFocus={!existing}
           />
         </div>
+
+        {!locked && (
+          <label className="block">
+            <span className="mb-1.5 block text-label font-medium">Inside (optional)</span>
+            <select
+              value={form.parentId}
+              disabled={hasKids}
+              onChange={(e) => setForm({ ...form, parentId: e.target.value })}
+              className={inputClass}
+            >
+              <option value="">Nothing: a main category</option>
+              {parentChoices.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1.5 block text-caption text-muted">
+              {hasKids ? 'It has categories inside it, so it stays a main category.' : 'e.g. Milk and Vegetables inside Groceries. Each still has its own budget.'}
+            </span>
+          </label>
+        )}
 
         <fieldset>
           <legend className="mb-2 text-label font-medium">Icon</legend>
@@ -272,14 +337,60 @@ function CategorySheet({ editing, kind, onClose }: { editing: CategoryDTO | 'new
           </div>
         </fieldset>
 
-        <ErrorBanner error={Object.keys(errors).length ? null : (save.error ?? hide.error)} />
+        <ErrorBanner error={Object.keys(errors).length ? null : (save.error ?? hide.error ?? merge.error ?? remove.error)} />
         <Button type="submit" className="w-full" disabled={!form.name.trim()} loading={save.isPending}>
           {existing ? 'Save' : 'Add category'}
         </Button>
         {existing && !locked && (
-          <Button type="button" variant="danger" className="w-full" loading={hide.isPending} onClick={() => hide.mutate()}>
-            <EyeOff className="size-4" /> Hide category
-          </Button>
+          <div className="space-y-3 border-t border-line pt-5">
+            <Button type="button" variant="danger" className="w-full" loading={hide.isPending} onClick={() => hide.mutate()}>
+              <EyeOff className="size-4" /> Hide category
+            </Button>
+            <div>
+              <p className="mb-1.5 text-label font-medium">Merge into another category</p>
+              <div className="flex gap-2">
+                <select value={mergeInto} onChange={(e) => setMergeInto(e.target.value)} className={`${inputClass} min-w-0 flex-1`} aria-label="Merge into">
+                  <option value="">Pick a category…</option>
+                  {mergeTargets.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!mergeInto}
+                  loading={merge.isPending}
+                  onClick={async () => {
+                    const target = mergeTargets.find((c) => c.id === mergeInto)!;
+                    const ok = await confirm({
+                      title: `Merge ${existing.name} into ${target.name}?`,
+                      message: `Every transaction, repeating entry and budget amount in ${existing.name} moves to ${target.name}, and ${existing.name} is removed. This can't be undone.`,
+                      confirmLabel: 'Merge',
+                      danger: true,
+                    });
+                    if (ok) merge.mutate();
+                  }}
+                >
+                  <Merge className="size-4" /> Merge
+                </Button>
+              </div>
+              <p className="mt-1.5 text-caption text-muted">For two categories that mean the same thing, like "Veg" and "Vegetables".</p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full text-negative"
+              loading={remove.isPending}
+              onClick={async () => {
+                const ok = await confirm({ title: `Delete ${existing.name}?`, message: 'Only categories nothing uses can be deleted.', confirmLabel: 'Delete', danger: true });
+                if (ok) remove.mutate();
+              }}
+            >
+              <Trash2 className="size-4" /> Delete (only if unused)
+            </Button>
+          </div>
         )}
       </form>
     </Sheet>

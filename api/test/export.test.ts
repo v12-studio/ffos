@@ -108,12 +108,63 @@ describe('section order', () => {
   });
 });
 
+describe('custom sections', () => {
+  const save = (sections: object[], token = owner.accessToken) => api('PUT', `/books/${bookId}/budget-sections`, { token, body: { sections } });
+  const defaults = [
+    { id: 'bills', name: 'Bills', kind: 'bills' },
+    { id: 'spending', name: 'Spending', kind: 'spending' },
+    { id: 'savings', name: 'Savings', kind: 'savings' },
+  ];
+
+  it('can be renamed, added and reordered; categories follow them in the budget and exports', async () => {
+    const res = await save([
+      { id: 'emi', name: 'EMIs & loans', kind: 'bills' },
+      { id: 'bills', name: 'Fixed costs', kind: 'bills' },
+      { id: 'spending', name: 'Day to day', kind: 'spending' },
+      { id: 'savings', name: 'Savings', kind: 'savings' },
+    ]);
+    expect(res.status).toBe(200);
+    const book = await api<BookDTO>('GET', `/books/${bookId}`, { token: owner.accessToken });
+    expect(book.body.sections.map((s) => s.name)).toEqual(['EMIs & loans', 'Fixed costs', 'Day to day', 'Savings']);
+
+    // Rent was a bill (by its name); move it into the new section. It's still tracked as a bill.
+    const moved = await api('PATCH', `/books/${bookId}/categories/${heads.Rent}/budget`, { token: owner.accessToken, body: { section: 'emi' } });
+    expect(moved.body).toMatchObject({ section: 'emi', group: 'bills' });
+    const budget = await api('GET', `/books/${bookId}/budget/2026-09`, { token: owner.accessToken });
+    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Rent)).toMatchObject({ section: 'emi', group: 'bills' });
+    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Groceries)).toMatchObject({ section: 'spending' });
+
+    const lines = await csv('what=budget&format=csv&from=2026-09&to=2026-09');
+    expect(lines.slice(1).map((l) => l.split(',').slice(1, 3).join(','))).toEqual(['Income,Income', 'EMIs & loans,Rent', 'Day to day,Groceries', 'Savings,Chit']);
+
+    const log = await api('GET', `/books/${bookId}/activity`, { token: owner.accessToken });
+    expect(log.body.some((a: { summary: string }) => a.summary.includes('added EMIs & loans') && a.summary.includes('renamed Bills to Fixed costs'))).toBe(true);
+  });
+
+  it('removing a section moves its categories to another of the same kind', async () => {
+    await save([{ id: 'emi', name: 'EMIs', kind: 'bills' }, ...defaults]);
+    await api('PATCH', `/books/${bookId}/categories/${heads.Rent}/budget`, { token: owner.accessToken, body: { section: 'emi' } });
+    await save(defaults);
+    const cats = await api('GET', `/books/${bookId}/categories`, { token: owner.accessToken });
+    expect(cats.body.find((c: { id: string }) => c.id === heads.Rent)).toMatchObject({ section: 'bills', group: 'bills' });
+  });
+
+  it('keeps one section of each kind, unique names, and needs budget.manage', async () => {
+    expect((await save([defaults[0]!, defaults[1]!, { id: 'more', name: 'More', kind: 'spending' }])).status).toBe(400);
+    expect((await save([...defaults, { id: 'x', name: 'bills', kind: 'bills' }])).status).toBe(400);
+    expect((await save([...defaults, { id: 'Bad Id', name: 'X', kind: 'bills' }])).status).toBe(400);
+    expect((await api('PATCH', `/books/${bookId}/categories/${heads.Rent}/budget`, { token: owner.accessToken, body: { section: 'nope' } })).status).toBe(400);
+    const contributor = await registerMember(owner.accessToken, bookId, 'contributor');
+    expect((await save(defaults, contributor.accessToken)).status).toBe(403);
+  });
+});
+
 describe('exporting transactions', () => {
   it('all transactions by default, with each category’s budget section', async () => {
     const lines = await csv('what=transactions&format=csv');
-    expect(lines[0]).toBe('Date,Type,Category,Section,Amount,Currency,Note,Added by,Added at');
+    expect(lines[0]).toBe('Date,Type,Category,Section,Amount,Currency,Note,Tags,For,Account,Added by,Added at');
     expect(lines).toHaveLength(6);
-    expect(lines[1]).toMatch(/^2026-09-01,income,Salary job,Income,30000.00,INR,Salary,Owner,/);
+    expect(lines[1]).toMatch(/^2026-09-01,income,Salary job,Income,30000.00,INR,Salary,,,,Owner,/);
     expect(lines[2]).toMatch(/^2026-09-05,expense,Rent,Bills,10000.00,/);
   });
 
@@ -130,7 +181,7 @@ describe('exporting transactions', () => {
 describe('exporting the budget', () => {
   it('plan vs actual per head for every month, with income first', async () => {
     const lines = await csv('what=budget&format=csv&from=2026-09&to=2026-10');
-    expect(lines[0]).toBe('Month,Section,Head,Planned,Actual,Remaining,Status');
+    expect(lines[0]).toBe('Month,Section,Category,Planned,Actual,Remaining,Status');
     expect(lines.slice(1, 5)).toEqual([
       '2026-09,Income,Income,30000.00,30000.00,0.00,Received',
       '2026-09,Bills,Rent,10000.00,10000.00,0.00,Paid',
@@ -213,7 +264,7 @@ describe('exporting everything', () => {
     expect(res.body.budgets.map((b: { month: string }) => b.month)).toEqual(['2026-09', '2026-10']);
     expect(res.body.budgets[0].lines[0]).toMatchObject({ category: 'Rent', planned: rs(10000) });
     expect(res.body.transactions).toHaveLength(5);
-    expect(res.body.book.groupOrder).toEqual(['bills', 'spending', 'savings']);
+    expect(res.body.book.sections.map((s: { id: string }) => s.id)).toEqual(['bills', 'spending', 'savings']);
   });
 });
 
@@ -234,5 +285,74 @@ describe('export requests that make no sense', () => {
     const res = await api('GET', `/books/${other.id}/categories`, { token: owner.accessToken });
     const foreign = res.body[0].id as string;
     expect(await status(`what=transactions&category=${foreign}`)).toBe(404);
+  });
+});
+
+describe('budget month from salary day', () => {
+  const setStart = (monthStartDay: number) => api('PATCH', `/books/${bookId}`, { token: owner.accessToken, body: { monthStartDay } });
+
+  it('October runs 25 Sep – 24 Oct when salary comes on the 25th', async () => {
+    await entry(heads.Groceries!, 300, '2026-09-25', 'start of October');
+    await entry(heads.Groceries!, 400, '2026-10-24', 'end of October');
+    await entry(heads.Groceries!, 500, '2026-10-25', 'start of November');
+    expect((await setStart(25)).body).toMatchObject({ monthStartDay: 25 });
+
+    const october = await api('GET', `/books/${bookId}/transactions?month=2026-10`, { token: owner.accessToken });
+    expect(october.body.map((t: { note: string }) => t.note).sort()).toEqual(['', 'Veg', 'end of October', 'start of October']);
+    const budget = await api('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken });
+    // 12 Sep's Big shop falls in September now; 3 Oct's Veg plus the two above are October's.
+    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Groceries).spent).toBe(rs(1200 + 300 + 400));
+    const summary = await api('GET', `/books/${bookId}/summary?month=2026-11`, { token: owner.accessToken });
+    expect(summary.body.expense).toBe(rs(500));
+
+    const trends = await api('GET', `/books/${bookId}/trends?end=2026-11&months=3`, { token: owner.accessToken });
+    expect(trends.body.months.map((m: { expense: number }) => m.expense)).toEqual([rs(10000 + 5500), rs(1200 + 3000 + 300 + 400), rs(500)]);
+
+    const lines = await csv('what=transactions&format=csv&from=2026-11&to=2026-11');
+    expect(lines.slice(1).map((l) => l.slice(0, 10))).toEqual(['2026-10-25']);
+  });
+
+  it('a monthly entry on the 28th is due in the budget month it falls in', async () => {
+    await setStart(25);
+    await api('POST', `/books/${bookId}/recurring`, {
+      token: owner.accessToken,
+      body: { type: 'expense', amount: rs(999), categoryId: heads.Rent, note: 'Internet', dayOfMonth: 28, startMonth: '2026-10' },
+    });
+    const budget = await api('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken });
+    expect(budget.body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Rent).due.date).toBe('2026-09-28');
+  });
+
+  it('book settings are checked', async () => {
+    const patch = (body: object) => api('PATCH', `/books/${bookId}`, { token: owner.accessToken, body });
+    expect((await patch({ monthStartDay: 29 })).status).toBe(400);
+    expect((await patch({ timeZone: 'Mars/Olympus' })).status).toBe(400);
+    expect((await patch({ numberLocale: 'xx-YY' })).status).toBe(400);
+    const ok = await patch({ timeZone: 'Asia/Dubai', numberLocale: 'en-US', alertAt: 90 });
+    expect(ok.body).toMatchObject({ timeZone: 'Asia/Dubai', numberLocale: 'en-US', alertAt: 90, monthStartDay: 1 });
+  });
+});
+
+describe('carrying unspent money over', () => {
+  it('what is left (or overspent) in a spending category moves into the next month', async () => {
+    const on = await api('PATCH', `/books/${bookId}/categories/${heads.Groceries}/budget`, { token: owner.accessToken, body: { rollover: true } });
+    expect(on.body).toMatchObject({ rollover: true });
+    // Pretend it was turned on in September (it normally counts from the month it's switched on).
+    const { collections } = await import('../src/db.ts');
+    const { ObjectId } = await import('mongodb');
+    await (await collections()).categories.updateOne({ _id: new ObjectId(heads.Groceries!) }, { $set: { rolloverFrom: '2026-09' } });
+
+    const line = async (month: string) =>
+      (await api('GET', `/books/${bookId}/budget/${month}`, { token: owner.accessToken })).body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Groceries);
+    // September: 5,000 planned, 5,500 spent → 500 over, carried into October as −500.
+    expect(await line('2026-09')).toMatchObject({ rolloverIn: 0, remaining: rs(-500) });
+    expect(await line('2026-10')).toMatchObject({ planned: rs(6000), rolloverIn: rs(-500), spent: rs(1200), remaining: rs(4300) });
+    // November follows October's plan: 6,000 plus the 4,300 left.
+    expect(await line('2026-11')).toMatchObject({ planned: rs(6000), rolloverIn: rs(4300), remaining: rs(10300) });
+    // Bills and other categories don't carry.
+    const rent = (await api('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken })).body.lines.find((l: { categoryId: string }) => l.categoryId === heads.Rent);
+    expect(rent.rolloverIn).toBe(0);
+
+    await api('PATCH', `/books/${bookId}/categories/${heads.Groceries}/budget`, { token: owner.accessToken, body: { rollover: false } });
+    expect(await line('2026-11')).toMatchObject({ rolloverIn: 0, remaining: rs(6000) });
   });
 });

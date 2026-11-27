@@ -20,7 +20,7 @@ export interface ExportPreset {
 }
 
 const WHAT: { value: ExportKind; label: string; detail: string }[] = [
-  { value: 'budget', label: 'Budget', detail: 'Planned and actual for each head, month by month, with income. Excel adds a monthly summary sheet.' },
+  { value: 'budget', label: 'Budget', detail: 'Planned and actual for each budget category, month by month, with income. Excel adds a monthly summary sheet.' },
   { value: 'transactions', label: 'Transactions', detail: 'Every entry: date, category, section, amount, note and who added it.' },
   {
     value: 'everything',
@@ -123,9 +123,9 @@ function ExportDialog({ onClose, preset }: { onClose: () => void; preset: Export
 
         {what !== 'everything' && (
           <label className="block">
-            <span className="mb-1.5 block text-label font-medium">{what === 'budget' ? 'Head' : 'Category'}</span>
+            <span className="mb-1.5 block text-label font-medium">Category</span>
             <select value={category ? categoryId : ''} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
-              <option value="">{what === 'budget' ? 'All heads' : 'All categories'}</option>
+              <option value="">{what === 'budget' ? 'All budget categories' : 'All categories'}</option>
               {what === 'budget' ? (
                 choices.map((c) => (
                   <option key={c.id} value={c.id}>

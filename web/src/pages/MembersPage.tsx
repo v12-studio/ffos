@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Crown, Download, History, Lock, LogOut, Settings2, Share2, Trash2, UserPlus, X } from 'lucide-react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check, Copy, Crown, Download, History, Lock, MessageCircle, Settings2, Share2, Trash2, UserPlus, X } from 'lucide-react';
 import { useState } from 'react';
 import {
   ASSIGNABLE_ROLES,
@@ -15,8 +15,9 @@ import {
 import { PageTitle } from '../components/AppShell.tsx';
 import { PhoneField } from '../components/auth-ui.tsx';
 import { useConfirm } from '../components/Confirm.tsx';
+import { BookSettings } from '../components/BookSettings.tsx';
 import { ExportSheet } from '../components/ExportSheet.tsx';
-import { Avatar, Button, Card, ErrorBanner, Field, fieldErrors, ListRow, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
+import { Avatar, Button, Card, ErrorBanner, fieldErrors, inputClass, ListRow, RoleBadge, SectionTitle, Sheet, Spinner } from '../components/ui.tsx';
 import { api } from '../lib/api.ts';
 import { useAuth } from '../lib/auth.tsx';
 import { useCurrentBook } from '../lib/book.tsx';
@@ -195,9 +196,17 @@ function InviteSheet({ open, onClose }: { open: boolean; onClose: () => void }) 
             {create.data.phone ? `, only for ${create.data.phone}` : ''}.
           </p>
           <div className="rounded-lg border border-line bg-subtle/60 p-3 font-mono text-label break-all">{link}</div>
+          <a
+            href={`https://wa.me/?text=${encodeURIComponent(message)}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-body font-medium text-primary-fg hover:bg-primary/90"
+          >
+            <MessageCircle className="size-4" /> Send on WhatsApp
+          </a>
           {'share' in navigator && (
-            <Button className="w-full" onClick={() => navigator.share({ title: `Join ${book.name}`, text: message }).catch(() => undefined)}>
-              <Share2 className="size-4" /> Share via WhatsApp, SMS…
+            <Button variant="secondary" className="w-full" onClick={() => navigator.share({ title: `Join ${book.name}`, text: message }).catch(() => undefined)}>
+              <Share2 className="size-4" /> Share another way
             </Button>
           )}
           <Button
@@ -350,123 +359,68 @@ function PendingInvites() {
 
 function ActivityFeed() {
   const { book } = useCurrentBook();
-  const [expanded, setExpanded] = useState(false);
-  const activity = useQuery({
-    queryKey: ['book', book.id, 'activity'],
-    queryFn: () => api.get<ActivityDTO[]>(`/books/${book.id}/activity`),
+  const [person, setPerson] = useState('');
+  const [kind, setKind] = useState('');
+  const members = useQuery({ queryKey: ['book', book.id, 'members'], queryFn: () => api.get<MemberDTO[]>(`/books/${book.id}/members`) });
+  const filters = new URLSearchParams({ ...(person ? { userId: person } : {}), ...(kind ? { entity: kind } : {}) });
+  const activity = useInfiniteQuery({
+    queryKey: ['book', book.id, 'activity', filters.toString()],
+    queryFn: ({ pageParam }) => api.get<ActivityDTO[]>(`/books/${book.id}/activity?${filters}${pageParam ? `&before=${encodeURIComponent(pageParam)}` : ''}`),
+    initialPageParam: '',
+    // A full page means there may be more before its last entry.
+    getNextPageParam: (last) => (last.length === 50 ? last.at(-1)!.at : undefined),
     refetchInterval: 60_000,
   });
-  const rows = activity.data ?? [];
-  if (activity.isLoading) {
-    return (
-      <div className="grid h-24 place-items-center text-muted">
-        <Spinner />
-      </div>
-    );
-  }
-  if (!rows.length) return <p className="py-6 text-center text-label text-muted">No activity yet.</p>;
-  const visible = expanded ? rows : rows.slice(0, 5);
+  const rows = activity.data?.pages.flat() ?? [];
 
   return (
     <>
-      <Card className="divide-y divide-line overflow-hidden">
-        {visible.map((a) => (
-          <div key={a.id} className="flex gap-3 px-4 py-3 text-label">
-            <History className="mt-0.5 size-4 shrink-0 text-muted" />
-            <p className="min-w-0 flex-1">
-              <strong>{a.userName}</strong> {a.summary}
-            </p>
-            <span className="shrink-0 text-caption text-muted">{relativeTime(a.at)}</span>
-          </div>
-        ))}
-        {rows.length > 5 && (
-          <button onClick={() => setExpanded(!expanded)} className="min-h-11 w-full text-label font-medium text-accent">
-            {expanded ? 'Show less' : `Show all ${rows.length}`}
-          </button>
-        )}
-      </Card>
-    </>
-  );
-}
-
-function BookSettings({ onDone }: { onDone: () => void }) {
-  const { book, can } = useCurrentBook();
-  const queryClient = useQueryClient();
-  const confirm = useConfirm();
-  const [form, setForm] = useState({ name: book.name, currency: book.currency });
-  const [forBook, setForBook] = useState(book.id);
-  if (forBook !== book.id) {
-    setForBook(book.id);
-    setForm({ name: book.name, currency: book.currency });
-  }
-
-  const refresh = () => {
-    onDone();
-    return queryClient.invalidateQueries({ queryKey: ['books'] });
-  };
-  const save = useMutation({ mutationFn: () => api.patch(`/books/${book.id}`, form), onSuccess: refresh });
-  const leave = useMutation({ mutationFn: () => api.post(`/books/${book.id}/leave`), onSuccess: refresh });
-  const remove = useMutation({ mutationFn: () => api.del(`/books/${book.id}`), onSuccess: refresh });
-  const errors = fieldErrors(save.error);
-  const dirty = form.name !== book.name || form.currency !== book.currency;
-  const canLeave = book.role !== 'owner';
-  const canDelete = can('book.delete') && !book.isPersonal;
-
-  return (
-      <div className="space-y-4">
-        {can('book.settings') && (
-          <form
-            className="space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              save.mutate();
-            }}
-          >
-            <Field label="Name" value={form.name} error={errors.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <Field label="Currency" maxLength={3} value={form.currency} error={errors.currency} onChange={(e) => setForm({ ...form, currency: e.target.value.toUpperCase() })} />
-            <ErrorBanner error={Object.keys(errors).length ? null : save.error} />
-            <Button type="submit" variant="secondary" className="w-full" disabled={!dirty} loading={save.isPending}>
-              Save
-            </Button>
-          </form>
-        )}
-        <ErrorBanner error={leave.error ?? remove.error} />
-        {canLeave && (
-          <Button
-            variant="danger"
-            className="w-full"
-            loading={leave.isPending}
-            onClick={async () => {
-              const ok = await confirm({
-                title: `Leave "${book.name}"?`,
-                message: "You'll need a new invite to rejoin.",
-                confirmLabel: 'Leave book',
-                danger: true,
-              });
-              if (ok) leave.mutate();
-            }}
-          >
-            <LogOut className="size-4" /> Leave book
-          </Button>
-        )}
-        {canDelete && (
-          <Button
-            variant="danger"
-            className="w-full"
-            loading={remove.isPending}
-            onClick={async () => {
-              const ok = await confirm({
-                title: `Delete "${book.name}"?`,
-                message: "It will be deleted for all members. This can't be undone from the app.",
-                confirmLabel: 'Delete book',
-                danger: true,
-              });
-              if (ok) remove.mutate();
-            }}
-          >
-            <Trash2 className="size-4" /> Delete book
-          </Button>
-        )}
+      <div className="mb-3 grid grid-cols-2 gap-2">
+        <select value={person} onChange={(e) => setPerson(e.target.value)} className={inputClass} aria-label="Who">
+          <option value="">Everyone</option>
+          {(members.data ?? []).map((m) => (
+            <option key={m.userId} value={m.userId}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+        <select value={kind} onChange={(e) => setKind(e.target.value)} className={inputClass} aria-label="What">
+          <option value="">All changes</option>
+          <option value="transaction">Transactions</option>
+          <option value="budget">Budget</option>
+          <option value="category">Categories</option>
+          <option value="recurring">Repeating entries</option>
+          <option value="member">Members</option>
+          <option value="book">Book</option>
+        </select>
       </div>
+      {activity.isLoading ? (
+        <div className="grid h-24 place-items-center text-muted">
+          <Spinner />
+        </div>
+      ) : !rows.length ? (
+        <p className="py-6 text-center text-label text-muted">No activity{person || kind ? ' matching that' : ' yet'}.</p>
+      ) : (
+        <Card className="divide-y divide-line overflow-hidden">
+          {rows.map((a) => (
+            <div key={a.id} className="flex gap-3 px-4 py-3 text-label">
+              <History className="mt-0.5 size-4 shrink-0 text-muted" />
+              <p className="min-w-0 flex-1">
+                <strong>{a.userName}</strong> {a.summary}
+              </p>
+              <span className="shrink-0 text-caption text-muted" title={new Date(a.at).toLocaleString()}>
+                {relativeTime(a.at)}
+              </span>
+            </div>
+          ))}
+          {activity.hasNextPage && (
+            <button onClick={() => activity.fetchNextPage()} disabled={activity.isFetchingNextPage} className="min-h-11 w-full text-label font-medium text-accent">
+              {activity.isFetchingNextPage ? 'Loading…' : 'Show older'}
+            </button>
+          )}
+        </Card>
+      )}
+      <p className="mt-2 px-0.5 text-caption text-muted">Kept for a year.</p>
+    </>
   );
 }

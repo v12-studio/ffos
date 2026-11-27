@@ -1,18 +1,22 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, House, List, PiggyBank, Plus, Settings, Users } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ChartColumn, Check, ChevronLeft, ChevronRight, ChevronsUpDown, FileUp, House, List, PiggyBank, Plus, RotateCcw, Settings, Users } from 'lucide-react';
 import { createContext, Suspense, useContext, useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, Outlet, useMatch, useSearchParams } from 'react-router';
-import { formatMoney, type BookDTO, type CategoryDTO, type TransactionDTO } from '@ffos/shared';
+import { BOOK_COLORS, BOOK_TEMPLATE_LABELS, BOOK_TEMPLATES, formatMoney, type BookDTO, type BookTemplate, type CategoryDTO, type DeletedBookDTO, type TransactionDTO } from '@ffos/shared';
 import { api } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { currentMonth, dayLabel, monthLabel, shiftMonth, todayISO } from '../lib/format.ts';
+import { useMembers } from '../lib/budget.ts';
+import { currentMonth, dayLabel, monthBounds, monthLabel, periodRangeLabel, shiftMonth, todayISO } from '../lib/format.ts';
+import { useTheme } from '../lib/theme.ts';
 import { preloadRoute, preloadTabsWhenIdle } from '../pages/lazy.ts';
 import { Logo } from './auth-ui.tsx';
+import { ColourPicker, CurrencySelect } from './BookFields.tsx';
 import { CategoryTile } from './CategoryIcon.tsx';
 import { OutboxSync } from './OutboxSync.tsx';
+import { useToast } from './Toast.tsx';
 import { TransactionSheet } from './TransactionSheet.tsx';
-import { Button, ErrorBanner, Field, fieldErrors, PageSkeleton, RoleBadge, Sheet } from './ui.tsx';
+import { Button, ErrorBanner, Field, fieldErrors, PageSkeleton, RoleBadge, Sheet, Spinner } from './ui.tsx';
 
 // ── transaction sheet is app-wide so the Add button works from any tab ──
 /** Starting values for a new entry, e.g. the budget head it was added from. */
@@ -39,22 +43,19 @@ export function useViewedMonth(month: string | null) {
 function defaultDate(month: string | null): string {
   const now = currentMonth();
   if (!month || month === now) return todayISO();
-  if (month > now) return `${month}-01`;
-  const [y, m] = month.split('-').map(Number) as [number, number];
-  return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`;
+  return month > now ? monthBounds(month).from : monthBounds(month).to;
 }
 
 // Spot in the phone header where a tab page puts its control (the month switcher), so title and month share one row.
 const HeaderSlotContext = createContext<HTMLElement | null>(null);
 
 // Phone tab bar: 2 tabs · Add · 2 tabs. Members lives in Settings on phones and in the sidebar on desktop.
-const NAV = [
-  { to: '/', label: 'Overview', icon: House, end: true },
-  { to: '/transactions', label: 'Transactions', icon: List, end: false },
-  { to: '/budget', label: 'Budget', icon: PiggyBank, end: false },
-  { to: '/more', label: 'Settings', icon: Settings, end: false },
-];
-const SIDEBAR_NAV = [...NAV.slice(0, 3), { to: '/members', label: 'Members', icon: Users, end: false }, NAV[3]!];
+const OVERVIEW = { to: '/', label: 'Overview', icon: House, end: true };
+const TRANSACTIONS = { to: '/transactions', label: 'Transactions', icon: List, end: false };
+const BUDGET = { to: '/budget', label: 'Budget', icon: PiggyBank, end: false };
+const REPORTS = { to: '/reports', label: 'Reports', icon: ChartColumn, end: false };
+const SETTINGS = { to: '/more', label: 'Settings', icon: Settings, end: false };
+const SIDEBAR_NAV = [OVERVIEW, TRANSACTIONS, BUDGET, REPORTS, { to: '/members', label: 'Members', icon: Users, end: false }, SETTINGS];
 
 /** Start downloading a tab's code as soon as the pointer or focus lands on its link. */
 const preloadProps = (to: string) => {
@@ -66,6 +67,9 @@ const preloadProps = (to: string) => {
 
 export function AppShell() {
   const { book, can } = useCurrentBook();
+  const [prefs] = useTheme();
+  // Phones: two tabs · Add · two tabs. The third is Budget or Reports, as the person chose.
+  const NAV = [OVERVIEW, TRANSACTIONS, prefs.tab === 'reports' ? REPORTS : BUDGET, SETTINGS];
   const [booksOpen, setBooksOpen] = useState(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const [viewedMonth, setViewedMonth] = useState<string | null>(null);
@@ -200,7 +204,7 @@ export function AppShell() {
   );
 }
 
-function TabLink({ to, label, icon: Icon, end }: (typeof NAV)[number]) {
+function TabLink({ to, label, icon: Icon, end }: typeof OVERVIEW) {
   return (
     <NavLink
       to={to}
@@ -223,19 +227,53 @@ function TabLink({ to, label, icon: Icon, end }: (typeof NAV)[number]) {
 function BooksSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { books, book, selectBook } = useCurrentBook();
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState({ name: '', currency: book.currency });
+  const freshForm = () => ({ name: '', currency: book.currency, color: BOOK_COLORS[books.length % BOOK_COLORS.length]!, template: 'household' as BookTemplate });
+  const [form, setForm] = useState(freshForm);
   const create = useMutation({
     mutationFn: () => api.post<BookDTO>('/books', form),
     onSuccess: async (created) => {
       await queryClient.invalidateQueries({ queryKey: ['books'] });
       selectBook(created.id);
       setCreating(false);
-      setForm({ name: '', currency: created.currency });
+      setForm(freshForm());
       onClose();
     },
   });
   const errors = fieldErrors(create.error);
+  // Books this person deleted lately, which they can bring back.
+  const deleted = useQuery({
+    queryKey: ['books', 'deleted'],
+    queryFn: () => api.get<DeletedBookDTO[]>('/books/deleted'),
+    enabled: open,
+  });
+  // A JSON backup (Export → Everything → JSON) comes back as a new book.
+  const fromBackup = useMutation({
+    mutationFn: async (file: File) => {
+      let data: unknown;
+      try {
+        data = JSON.parse(await file.text());
+      } catch {
+        throw new Error("That file isn't a backup. Pick the .json file made by Export → Everything → JSON backup.");
+      }
+      return api.post<{ book: BookDTO; counts: { transactions: number; skipped: number } }>('/books/import', data);
+    },
+    onSuccess: async ({ book: restored, counts }) => {
+      await queryClient.invalidateQueries({ queryKey: ['books'] });
+      selectBook(restored.id);
+      toast({ message: `${restored.name}: ${counts.transactions} transactions restored`, duration: 3500 });
+      onClose();
+    },
+  });
+  const restore = useMutation({
+    mutationFn: (id: string) => api.post<BookDTO>(`/books/${id}/restore`),
+    onSuccess: async (restored) => {
+      await queryClient.invalidateQueries({ queryKey: ['books'] });
+      selectBook(restored.id);
+      onClose();
+    },
+  });
 
   return (
     <Sheet open={open} onClose={onClose} title="Books">
@@ -272,7 +310,25 @@ function BooksSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
         >
           <ErrorBanner error={Object.keys(errors).length ? null : create.error} />
           <Field label="Book name" placeholder="e.g. Household, Parents, Goa trip" value={form.name} error={errors.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus required />
-          <Field label="Currency" maxLength={3} value={form.currency} error={errors.currency} onChange={(e) => setForm({ ...form, currency: e.target.value.toUpperCase() })} />
+          <CurrencySelect value={form.currency} error={errors.currency} onChange={(currency) => setForm({ ...form, currency })} />
+          <ColourPicker value={form.color} onChange={(color) => setForm({ ...form, color })} />
+          <fieldset>
+            <legend className="mb-1.5 text-label font-medium">Start with categories for</legend>
+            <div className="grid grid-cols-2 gap-2">
+              {BOOK_TEMPLATES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setForm({ ...form, template: t })}
+                  aria-pressed={form.template === t}
+                  className={`rounded-lg border px-3 py-2 text-left ${form.template === t ? 'border-primary bg-subtle ring-1 ring-primary' : 'border-line hover:bg-subtle/60'}`}
+                >
+                  <span className="block text-label font-medium">{BOOK_TEMPLATE_LABELS[t].name}</span>
+                  <span className="block text-caption text-muted">{BOOK_TEMPLATE_LABELS[t].description}</span>
+                </button>
+              ))}
+            </div>
+          </fieldset>
           <div className="flex gap-2">
             <Button type="button" variant="secondary" className="flex-1" onClick={() => setCreating(false)}>
               Cancel
@@ -283,9 +339,46 @@ function BooksSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
           </div>
         </form>
       ) : (
-        <Button variant="secondary" className="mt-4 w-full" onClick={() => setCreating(true)}>
-          <Plus className="size-4" /> New book
-        </Button>
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <Button variant="secondary" onClick={() => setCreating(true)}>
+            <Plus className="size-4" /> New book
+          </Button>
+          <label className={`inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-body font-medium hover:bg-subtle ${fromBackup.isPending ? 'pointer-events-none opacity-50' : ''}`}>
+            {fromBackup.isPending ? <Spinner className="size-4" /> : <FileUp className="size-4" />} Restore a backup
+            <input
+              type="file"
+              accept=".json,application/json"
+              className="sr-only"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) fromBackup.mutate(file);
+                e.target.value = '';
+              }}
+            />
+          </label>
+        </div>
+      )}
+      <ErrorBanner error={fromBackup.error} />
+
+      {!creating && (deleted.data?.length ?? 0) > 0 && (
+        <section className="mt-6">
+          <p className="mb-1.5 text-caption font-medium text-muted">Recently deleted</p>
+          <div className="overflow-hidden rounded-xl border border-line">
+            {deleted.data!.map((b) => (
+              <div key={b.id} className="flex min-h-14 items-center gap-3 border-b border-line px-4 last:border-b-0">
+                <span className="size-2.5 shrink-0 rounded-[3px] opacity-50" style={{ backgroundColor: b.color }} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body text-muted">{b.name}</span>
+                  <span className="text-caption text-muted">Can be restored until {new Date(b.restoreUntil).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</span>
+                </span>
+                <Button variant="secondary" className="min-h-9! px-3 text-label" loading={restore.isPending && restore.variables === b.id} onClick={() => restore.mutate(b.id)}>
+                  <RotateCcw className="size-3.5" /> Restore
+                </Button>
+              </div>
+            ))}
+          </div>
+          <ErrorBanner error={restore.error} />
+        </section>
       )}
     </Sheet>
   );
@@ -299,13 +392,16 @@ function shortMonthLabel(month: string): string {
 
 export function MonthSwitcher({ month, onChange }: { month: string; onChange: (m: string) => void }) {
   const btn = 'grid size-11 place-items-center text-muted hover:text-ink';
+  // Months that start on salary day show their dates, e.g. 25 Sep – 24 Oct.
+  const range = periodRangeLabel(month);
   return (
     <div className="flex shrink-0 items-center rounded-lg border border-line bg-surface">
       <button onClick={() => onChange(shiftMonth(month, -1))} className={btn} aria-label="Previous month">
         <ChevronLeft className="size-4" />
       </button>
-      <span className="min-w-[4.75rem] text-center text-label font-semibold whitespace-nowrap" aria-label={monthLabel(month)}>
-        {shortMonthLabel(month)}
+      <span className="flex min-w-[4.75rem] flex-col items-center text-center whitespace-nowrap" aria-label={`${monthLabel(month)}${range ? `, ${range}` : ''}`}>
+        <span className="text-label leading-tight font-semibold">{shortMonthLabel(month)}</span>
+        {range && <span className="text-[0.625rem] leading-tight text-muted">{range}</span>}
       </span>
       <button onClick={() => onChange(shiftMonth(month, 1))} className={btn} aria-label="Next month">
         <ChevronRight className="size-4" />
@@ -328,23 +424,41 @@ export function TransactionRow({
   category,
   currency,
   showDate,
+  selected,
+  onSelect,
 }: {
   txn: TransactionDTO;
   category?: CategoryDTO;
   currency: string;
   showDate?: boolean;
+  /** Select mode: tapping ticks the row instead of opening it. */
+  selected?: boolean;
+  onSelect?: () => void;
 }) {
   const open = useOpenTransaction();
   const { book } = useCurrentBook();
+  const members = useMembers(book.id, book.memberCount > 1 && Boolean(txn.forMemberId));
+  const forName = txn.forMemberId ? members.data?.find((m) => m.userId === txn.forMemberId)?.name.split(' ')[0] : null;
   const detail = [
     txn.note ? category?.name : null,
     showDate ? dayLabel(txn.date) : null,
+    forName ? `for ${forName}` : null,
     book.memberCount > 1 ? `by ${txn.createdByName}` : null,
+    txn.tags?.length ? txn.tags.map((t) => `#${t}`).join(' ') : null,
   ]
     .filter(Boolean)
     .join(' · ');
   return (
-    <button onClick={() => open(txn)} className="flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left hover:bg-subtle/60 active:bg-subtle">
+    <button
+      onClick={() => (onSelect ? onSelect() : open(txn))}
+      aria-pressed={onSelect ? Boolean(selected) : undefined}
+      className={`flex min-h-14 w-full items-center gap-3 px-4 py-2 text-left hover:bg-subtle/60 active:bg-subtle ${selected ? 'bg-primary/5' : ''}`}
+    >
+      {onSelect && (
+        <span className={`grid size-5 shrink-0 place-items-center rounded-md border ${selected ? 'border-primary bg-primary text-primary-fg' : 'border-line'}`} aria-hidden>
+          {selected && <Check className="size-3.5" strokeWidth={3} />}
+        </span>
+      )}
       <CategoryTile category={category} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-body font-medium">{txn.note || category?.name || 'Transaction'}</span>

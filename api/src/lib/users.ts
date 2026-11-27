@@ -20,6 +20,8 @@ export function toUserDTO(user: UserDoc): UserDTO {
     phone: user.phone,
     email: user.email ?? null,
     isInstanceOwner: user.isInstanceOwner,
+    recoveryCodesLeft: user.recoveryCodeHashes.length,
+    notify: { bills: user.notify?.bills ?? true, budget: user.notify?.budget ?? true },
   };
 }
 

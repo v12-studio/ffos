@@ -33,3 +33,103 @@ export function recurringDate(month: string, dayOfMonth: number): string {
   const day = Math.min(dayOfMonth, daysInMonth(month));
   return `${month}-${String(day).padStart(2, '0')}`;
 }
+
+/** How a book counts days: its time zone, and the day of the month its budget month starts (salary day). */
+export interface BookCalendar {
+  timeZone: string;
+  /** 1–28. 1 is the calendar month; 25 makes "October" run 25 Sep – 24 Oct. */
+  startDay: number;
+}
+
+export const DEFAULT_CALENDAR: BookCalendar = { timeZone: APP_TIME_ZONE, startDay: 1 };
+
+const clampStart = (startDay: number) => Math.min(28, Math.max(1, Math.trunc(startDay) || 1));
+const pad = (n: number) => String(n).padStart(2, '0');
+
+/** YYYY-MM-DD in the given time zone (falls back to Mumbai time for an unknown zone). */
+export function todayIn(timeZone: string, now: Date = new Date()): string {
+  try {
+    return now.toLocaleDateString('en-CA', { timeZone });
+  } catch {
+    return todayInAppZone(now);
+  }
+}
+
+/**
+ * The days of budget month `month` (inclusive). With a start day of 1 it's the calendar month; otherwise it
+ * runs from the start day of the month before up to the day before the start day: October with 25 → 25 Sep – 24 Oct.
+ */
+export function periodRange(month: string, startDay = 1): { from: string; to: string } {
+  const start = clampStart(startDay);
+  if (start === 1) return { from: `${month}-01`, to: `${month}-${pad(daysInMonth(month))}` };
+  return { from: `${shiftMonthKey(month, -1)}-${pad(start)}`, to: `${month}-${pad(start - 1)}` };
+}
+
+/** The budget month a date falls in. */
+export function periodOf(date: string, startDay = 1): string {
+  const start = clampStart(startDay);
+  const month = date.slice(0, 7);
+  return start > 1 && Number(date.slice(8, 10)) >= start ? shiftMonthKey(month, 1) : month;
+}
+
+/** The current budget month in the book's time zone. */
+export function currentPeriod(calendar: BookCalendar, now: Date = new Date()): string {
+  return periodOf(todayIn(calendar.timeZone, now), calendar.startDay);
+}
+
+/** How many days budget month `month` has. */
+export function periodLength(month: string, startDay = 1): number {
+  const { from, to } = periodRange(month, startDay);
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+}
+
+/** Which day of its budget month `date` is (1 = the first day). */
+export function dayOfPeriod(date: string, startDay = 1): number {
+  const { from } = periodRange(periodOf(date, startDay), startDay);
+  return Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
+}
+
+/** The date a monthly entry on `dayOfMonth` falls on within budget month `month`. */
+export function occurrenceIn(month: string, dayOfMonth: number, startDay = 1): string {
+  const start = clampStart(startDay);
+  if (start > 1 && dayOfMonth >= start) return recurringDate(shiftMonthKey(month, -1), dayOfMonth);
+  return recurringDate(month, dayOfMonth);
+}
+
+/** Mongo expression for a transaction's budget month, from its `date` field. */
+export function periodExpression(startDay = 1): unknown {
+  const start = clampStart(startDay);
+  const month = { $substrBytes: ['$date', 0, 7] };
+  if (start === 1) return month;
+  // Dates on or after the start day belong to the next month: build "YYYY-MM" for month + 1.
+  const y = { $toInt: { $substrBytes: ['$date', 0, 4] } };
+  const m = { $toInt: { $substrBytes: ['$date', 5, 2] } };
+  const nextY = { $cond: [{ $eq: [m, 12] }, { $add: [y, 1] }, y] };
+  const nextM = { $cond: [{ $eq: [m, 12] }, 1, { $add: [m, 1] }] };
+  const next = {
+    $concat: [{ $toString: nextY }, '-', { $cond: [{ $lt: [nextM, 10] }, { $concat: ['0', { $toString: nextM }] }, { $toString: nextM }] }],
+  };
+  return { $cond: [{ $gte: [{ $substrBytes: ['$date', 8, 2] }, pad(start)] }, next, month] };
+}
+
+/** Months between two YYYY-MM keys (to − from). */
+export function monthsBetweenKeys(from: string, to: string): number {
+  const [fy, fm] = from.split('-').map(Number) as [number, number];
+  const [ty, tm] = to.split('-').map(Number) as [number, number];
+  return (ty - fy) * 12 + (tm - fm);
+}
+
+/** Whether a repeating entry falls due in `month`: from its start, every N months, up to its last month. */
+export function isDueIn(rule: { startMonth: string; everyMonths?: number; endMonth?: string | null }, month: string): boolean {
+  if (month < rule.startMonth || (rule.endMonth && month > rule.endMonth)) return false;
+  return monthsBetweenKeys(rule.startMonth, month) % (rule.everyMonths ?? 1) === 0;
+}
+
+/** The first month from `from` on that the entry is due, or null if it has ended. */
+export function nextDueMonth(rule: { startMonth: string; everyMonths?: number; endMonth?: string | null }, from: string): string | null {
+  const every = rule.everyMonths ?? 1;
+  let month = from < rule.startMonth ? rule.startMonth : from;
+  const offset = monthsBetweenKeys(rule.startMonth, month) % every;
+  if (offset) month = shiftMonthKey(month, every - offset);
+  return rule.endMonth && month > rule.endMonth ? null : month;
+}

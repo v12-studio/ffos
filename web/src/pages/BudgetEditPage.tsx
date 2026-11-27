@@ -12,7 +12,7 @@ import { useCategories } from '../components/TransactionSheet.tsx';
 import { Button, Card, ErrorBanner, inputClass, PageSkeleton, SectionTitle, Sheet } from '../components/ui.tsx';
 import { api, ApiError } from '../lib/api.ts';
 import { useCurrentBook } from '../lib/book.tsx';
-import { useBudget, useBudgetSuggestions, useGroupOrder, useSavePlan } from '../lib/budget.ts';
+import { sectionIdOf, useBudget, useBudgetSuggestions, useSavePlan, useSections } from '../lib/budget.ts';
 import { currencySymbol, currentMonth, minorToInput, monthLabel } from '../lib/format.ts';
 
 interface Row {
@@ -51,7 +51,12 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
   const suggestions = useBudgetSuggestions(book.id, month);
   const suggestionFor = new Map((suggestions.data?.byCategory ?? []).map((x) => [x.categoryId, x]));
   const groupOf = (id: string): HeadGroup => byId.get(id)?.group ?? 'spending';
-  const groupOrder = useGroupOrder();
+  const sections = useSections();
+  // The section a category is listed under in this plan.
+  const sectionOf = (id: string) => {
+    const cat = byId.get(id);
+    return cat ? sectionIdOf(cat, sections) : sections.find((s) => s.kind === 'spending')!.id;
+  };
 
   const incomeMinor = toMinor(income || '0');
   const rowMinor = new Map(rows.map((r) => [r.categoryId, toMinor(r.amount || '0')]));
@@ -62,7 +67,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
   const willSave = (incomeMinor ?? 0) - total('bills') - total('spending');
   const money = (n: number) => formatMoney(n, book.currency);
   // Heads are kept in section order (the book's choice); the order within a section is the family's.
-  const ordered = groupOrder.flatMap((g) => rows.filter((r) => groupOf(r.categoryId) === g));
+  const ordered = sections.flatMap((sec) => rows.filter((r) => sectionOf(r.categoryId) === sec.id));
 
   const save = useSavePlan(book.id, month);
   const submit = () =>
@@ -120,14 +125,14 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
               <Button
                 onClick={() => {
                   setRows(fromHistory.map((x) => ({ categoryId: x.categoryId, amount: minorToInput(x.average) })));
-                  toast({ message: `Added ${fromHistory.length} heads at what you usually spend`, duration: 3000 });
+                  toast({ message: `Added ${fromHistory.length} categories at what you usually spend`, duration: 3000 });
                 }}
               >
                 <Sparkles className="size-4" /> Start from what you spent
               </Button>
             )}
             <Button variant={fromHistory.length ? 'secondary' : 'primary'} onClick={() => setAdding(true)}>
-              <Plus className="size-4" /> Pick budget heads
+              <Plus className="size-4" /> Pick categories
             </Button>
           </div>
           {fromHistory.length > 0 && <p className="mt-3 text-caption text-muted">Uses the average of the last three months. You can change every amount.</p>}
@@ -139,15 +144,16 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
               onClick={() => setRows((r) => r.map((x) => (!x.amount && suggestionFor.get(x.categoryId) ? { ...x, amount: minorToInput(suggestionFor.get(x.categoryId)!.average) } : x)))}
               className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-line text-label font-medium text-accent hover:bg-subtle"
             >
-              <Sparkles className="size-4" /> Fill {emptyWithSuggestion.length} empty head{emptyWithSuggestion.length === 1 ? '' : 's'} with the usual amount
+              <Sparkles className="size-4" /> Fill {emptyWithSuggestion.length} empty categor{emptyWithSuggestion.length === 1 ? 'y' : 'ies'} with the usual amount
             </button>
           )}
-          {groupOrder.map((group) => {
-            const groupRows = rows.filter((r) => groupOf(r.categoryId) === group);
+          {sections.map((section) => {
+            const groupRows = rows.filter((r) => sectionOf(r.categoryId) === section.id);
+            const sectionTotal = groupRows.reduce((sum, r) => sum + (rowMinor.get(r.categoryId) ?? 0), 0);
             return (
-              <section key={group}>
-                <SectionTitle action={<span className="text-label text-muted tabular">{money(total(group))}</span>}>
-                  {HEAD_GROUP_LABELS[group].name}
+              <section key={section.id}>
+                <SectionTitle action={<span className="text-label text-muted tabular">{money(sectionTotal)}</span>}>
+                  {section.name}
                   {groupRows.length > 0 && ` · ${groupRows.length}`}
                 </SectionTitle>
                 {groupRows.length === 0 ? (
@@ -156,7 +162,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
                     className="flex min-h-12 w-full items-center gap-2 rounded-xl border border-dashed border-line px-4 text-left text-label text-muted hover:bg-subtle"
                   >
                     <Plus className="size-4 shrink-0" />
-                    <span className="min-w-0 flex-1">{HEAD_GROUP_LABELS[group].description}</span>
+                    <span className="min-w-0 flex-1">{HEAD_GROUP_LABELS[section.kind].description}</span>
                   </button>
                 ) : (
                   <Card className="overflow-hidden">
@@ -166,7 +172,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
                       keyOf={(r) => r.categoryId}
                       onMove={(from, to) => {
                         const moved = moveItem(groupRows, from, to);
-                        setRows((all) => [...all.filter((r) => groupOf(r.categoryId) !== group), ...moved]);
+                        setRows((all) => [...all.filter((r) => sectionOf(r.categoryId) !== section.id), ...moved]);
                       }}
                       renderItem={(row, handle) => {
                         const cat = byId.get(row.categoryId);
@@ -174,7 +180,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
                         const amountMinor = rowMinor.get(row.categoryId);
                         return (
                           <div className="flex items-center gap-2 py-1.5 pr-2 pl-3">
-                            <DragHandle handle={handle} label={cat?.name ?? 'Head'} />
+                            <DragHandle handle={handle} label={cat?.name ?? 'Category'} />
                             <div className="min-w-0 flex-1">
                               <button onClick={() => setSettingsFor(row.categoryId)} className="block max-w-full truncate text-left text-body font-medium hover:underline">
                                 {cat?.name ?? 'Unknown'}
@@ -209,7 +215,7 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
                             <button
                               onClick={() => setRows((r) => r.filter((x) => x.categoryId !== row.categoryId))}
                               className="grid size-9 shrink-0 place-items-center rounded-lg text-muted hover:bg-subtle hover:text-ink"
-                              aria-label={`Remove ${cat?.name ?? 'head'}`}
+                              aria-label={`Remove ${cat?.name ?? 'category'}`}
                             >
                               <X className="size-4" />
                             </button>
@@ -224,11 +230,11 @@ function Editor({ month, budget, categories }: { month: string; budget: BudgetDT
           })}
           <div className="flex justify-center">
             <Button variant="secondary" onClick={() => setAdding(true)}>
-              <Plus className="size-4" /> Add heads
+              <Plus className="size-4" /> Add categories
             </Button>
           </div>
           <p className="px-0.5 text-caption text-muted">
-            Tap a head's name to make it a bill, spending or savings head, set a goal, or make it someone's allowance. Hold ⠿ and drag to reorder. To change the order of the sections, use Arrange on the Budget tab.
+            Tap a category's name to choose its section (bill, spending or savings), set a goal, or make it someone's allowance. Hold ⠿ and drag to reorder. To change the order of the sections, use Arrange on the Budget tab.
           </p>
         </>
       )}
@@ -318,6 +324,7 @@ function AddHeadSheet({
   const averageOf = new Map((suggestions.data?.byCategory ?? []).map((x) => [x.categoryId, x.average]));
   const queryClient = useQueryClient();
   const categories = useCategories(book.id);
+  const sections = useSections();
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
   useEffect(() => {
@@ -355,10 +362,10 @@ function AddHeadSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="Add budget heads"
+      title="Add to the budget"
       footer={
         <Button className="w-full" disabled={picked.length === 0} onClick={() => onAdd(picked)}>
-          {picked.length === 0 ? 'Tick the heads to add' : `Add ${picked.length} head${picked.length === 1 ? '' : 's'}`}
+          {picked.length === 0 ? 'Tick the categories to add' : `Add ${picked.length} categor${picked.length === 1 ? 'y' : 'ies'}`}
         </Button>
       }
     >
@@ -374,8 +381,8 @@ function AddHeadSheet({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search, or type a new head"
-            aria-label="Search or name a new head"
+            placeholder="Search, or type a new category"
+            aria-label="Search or name a new category"
             maxLength={40}
             autoComplete="off"
             className={`${inputClass} pl-10`}
@@ -405,7 +412,7 @@ function AddHeadSheet({
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{c.name}</span>
                   <span className="block truncate text-caption text-muted tabular">
-                    {HEAD_GROUP_LABELS[c.group].name}
+                    {sections.find((sec) => sec.id === sectionIdOf(c, sections))?.name}
                     {averageOf.get(c.id) ? ` · usually ${formatMoney(averageOf.get(c.id)!, book.currency)}` : ''}
                   </span>
                 </span>
@@ -420,7 +427,7 @@ function AddHeadSheet({
           })}
         </div>
       ) : (
-        !text && <p className="py-6 text-center text-label text-muted">Every category is already in the plan. Type a name to create a new head.</p>
+        !text && <p className="py-6 text-center text-label text-muted">Every category is already in the plan. Type a name to create a new one.</p>
       )}
     </Sheet>
   );

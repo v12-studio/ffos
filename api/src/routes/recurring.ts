@@ -2,32 +2,42 @@ import { Hono } from 'hono';
 import { ObjectId } from 'mongodb';
 import {
   canModifyRecord,
-  currentAppMonth,
+  currentPeriod,
   formatMoney,
   monthSchema,
   recurringAddSchema,
   recurringCreateSchema,
-  recurringDate,
+  isDueIn,
+  nextDueMonth,
+  occurrenceIn,
+  todayIn,
   recurringPaySchema,
   recurringSkipSchema,
   recurringUpdateSchema,
-  todayInAppZone,
   type RecurringDTO,
   type RecurringDueDTO,
 } from '@ffos/shared';
 import type { AppEnv } from '../context.ts';
 import type { BookDoc, Collections, RecurringDoc, TransactionDoc } from '../db.ts';
-import { diff, logActivity } from '../lib/books.ts';
+import { calendarOf, diff, logActivity } from '../lib/books.ts';
 import { badRequest, forbidden, isDuplicateKey, notFound, oid, parse } from '../lib/errors.ts';
 import { requirePermission } from '../middleware/book.ts';
 import { assertCategory, monthRange, userNames } from './ledger.ts';
 
-// Mounted under /books/:bookId after requireBook. Monthly entries (rent, salary, EMIs) that
-// the Overview offers to add once their day comes. Anyone who can add transactions can set
+// Mounted under /books/:bookId after requireBook. Repeating entries (rent, salary, EMIs, yearly insurance)
+// that the Overview offers to add once their day comes. Anyone who can add transactions can set
 // one up; changing or removing it follows the same rules as editing a transaction.
 
-async function toRecurringDTOs(db: Collections, docs: RecurringDoc[]): Promise<RecurringDTO[]> {
+/** "monthly", "every 3 months", "yearly", plus "until Mar 2028" when it ends. */
+function repeatWords(rule: Pick<RecurringDoc, 'everyMonths' | 'endMonth'>) {
+  const every = rule.everyMonths ?? 1;
+  const base = every === 1 ? 'monthly' : every === 12 ? 'yearly' : `every ${every} months`;
+  return rule.endMonth ? `${base} until ${rule.endMonth}` : base;
+}
+
+async function toRecurringDTOs(db: Collections, book: BookDoc, docs: RecurringDoc[]): Promise<RecurringDTO[]> {
   const names = await userNames(db, docs.map((d) => d.createdBy));
+  const thisMonth = currentPeriod(calendarOf(book));
   return docs.map((r) => ({
     id: r._id.toHexString(),
     type: r.type,
@@ -36,6 +46,9 @@ async function toRecurringDTOs(db: Collections, docs: RecurringDoc[]): Promise<R
     note: r.note,
     dayOfMonth: r.dayOfMonth,
     startMonth: r.startMonth,
+    everyMonths: r.everyMonths ?? 1,
+    endMonth: r.endMonth ?? null,
+    nextDueMonth: nextDueMonth(r, thisMonth),
     active: r.active,
     createdBy: r.createdBy.toHexString(),
     createdByName: names.get(r.createdBy.toHexString()) ?? 'Former member',
@@ -49,26 +62,27 @@ async function toRecurringDTOs(db: Collections, docs: RecurringDoc[]): Promise<R
  * Entries whose category was hidden are left out until it's unhidden or changed.
  */
 async function dueIn(db: Collections, book: BookDoc, month: string) {
-  const today = todayInAppZone();
-  const thisMonth = today.slice(0, 7);
-  if (month > thisMonth) return [];
+  const calendar = calendarOf(book);
+  const today = todayIn(calendar.timeZone);
+  if (month > currentPeriod(calendar)) return [];
   const rules = await db.recurring
     .find({ bookId: book._id, active: true, startMonth: { $lte: month }, skippedMonths: { $ne: month } })
-    .toArray();
+    .toArray()
+    .then((list) => list.filter((r) => isDueIn(r, month)));
   if (!rules.length) return [];
   const [added, liveCategories] = await Promise.all([
     db.transactions.distinct('recurringId', {
       bookId: book._id,
       recurringId: { $in: rules.map((r) => r._id) },
       deletedAt: { $exists: false },
-      date: monthRange(month),
+      date: monthRange(month, calendar.startDay),
     }),
     db.categories.distinct('_id', { _id: { $in: rules.map((r) => r.categoryId) }, archived: false }),
   ]);
   const addedIds = new Set(added.map((id) => (id as ObjectId).toHexString()));
   const live = new Set(liveCategories.map((id) => id.toHexString()));
   return rules
-    .map((rule) => ({ rule, date: recurringDate(month, rule.dayOfMonth) }))
+    .map((rule) => ({ rule, date: occurrenceIn(month, rule.dayOfMonth, calendar.startDay) }))
     .filter(({ rule, date }) => !addedIds.has(rule._id.toHexString()) && live.has(rule.categoryId.toHexString()) && date <= today)
     .sort((a, b) => a.date.localeCompare(b.date) || b.rule.amount - a.rule.amount);
 }
@@ -124,7 +138,7 @@ export const recurringRoutes = new Hono<AppEnv>()
   .get('/recurring', async (c) => {
     const db = c.get('db');
     const rows = await db.recurring.find({ bookId: c.get('book')._id }).sort({ dayOfMonth: 1, createdAt: 1 }).toArray();
-    return c.json(await toRecurringDTOs(db, rows));
+    return c.json(await toRecurringDTOs(db, c.get('book'), rows));
   })
 
   .post('/recurring', requirePermission('txn.create'), async (c) => {
@@ -142,6 +156,8 @@ export const recurringRoutes = new Hono<AppEnv>()
       note: input.note,
       dayOfMonth: input.dayOfMonth,
       startMonth: input.startMonth,
+      ...(input.everyMonths !== 1 ? { everyMonths: input.everyMonths } : {}),
+      ...(input.endMonth ? { endMonth: input.endMonth } : {}),
       active: true,
       skippedMonths: [],
       createdBy: c.get('userId'),
@@ -157,9 +173,9 @@ export const recurringRoutes = new Hono<AppEnv>()
       action: 'create',
       entity: 'recurring',
       entityId: doc._id,
-      summary: `set up a monthly ${doc.type} of ${formatMoney(doc.amount, c.get('book').currency)} (${category.name}) on day ${doc.dayOfMonth}`,
+      summary: `set up a repeating ${doc.type} of ${formatMoney(doc.amount, c.get('book').currency)} (${category.name}) on day ${doc.dayOfMonth}, ${repeatWords(doc)}`,
     });
-    const [dto] = await toRecurringDTOs(db, [doc]);
+    const [dto] = await toRecurringDTOs(db, c.get('book'), [doc]);
     return c.json(dto, 201);
   })
 
@@ -171,17 +187,23 @@ export const recurringRoutes = new Hono<AppEnv>()
     if (!canModifyRecord(c.get('role'), 'update', rule.createdBy.toHexString(), c.get('userId').toHexString())) {
       throw forbidden('You can only change recurring entries you set up');
     }
-    const { categoryId, ...rest } = input;
+    const { categoryId, endMonth, ...rest } = input;
     const changes: Partial<RecurringDoc> = { ...rest };
+    const $unset: Record<string, ''> = {};
+    if (endMonth === null) $unset.endMonth = '';
+    else if (endMonth) {
+      if (endMonth < rule.startMonth) throw badRequest('It has to end after it starts', { endMonth: 'It has to end after it starts' });
+      changes.endMonth = endMonth;
+    }
     const type = input.type ?? rule.type;
     if ((categoryId && categoryId !== rule.categoryId.toHexString()) || type !== rule.type) {
       changes.categoryId = (await assertCategory(db, bookId, categoryId ?? rule.categoryId.toHexString(), type))._id;
     }
-    const changed = diff(rule, changes);
+    const changed = { ...diff(rule, changes), ...(endMonth === null && rule.endMonth ? { endMonth: { from: rule.endMonth, to: null } } : {}) };
     if (Object.keys(changed).length) {
       await db.recurring.updateOne(
         { _id: rule._id },
-        { $set: { ...changes, updatedBy: c.get('userId'), updatedAt: new Date() }, $inc: { version: 1 } },
+        { $set: { ...changes, updatedBy: c.get('userId'), updatedAt: new Date() }, ...(Object.keys($unset).length ? { $unset } : {}), $inc: { version: 1 } },
       );
       await logActivity(db, {
         bookId,
@@ -191,14 +213,14 @@ export const recurringRoutes = new Hono<AppEnv>()
         entityId: rule._id,
         summary:
           input.active === false
-            ? 'paused a monthly entry'
+            ? 'paused a repeating entry'
             : input.active === true && !rule.active
-              ? 'resumed a monthly entry'
-              : `edited a monthly entry (${Object.keys(changed).join(', ')})`,
+              ? 'resumed a repeating entry'
+              : `edited a repeating entry (${Object.keys(changed).join(', ')})`,
         diff: changed,
       });
     }
-    const [dto] = await toRecurringDTOs(db, [(await db.recurring.findOne({ _id: rule._id }))!]);
+    const [dto] = await toRecurringDTOs(db, c.get('book'), [(await db.recurring.findOne({ _id: rule._id }))!]);
     return c.json(dto);
   })
 
@@ -217,16 +239,16 @@ export const recurringRoutes = new Hono<AppEnv>()
       action: 'delete',
       entity: 'recurring',
       entityId: rule._id,
-      summary: `removed a monthly ${rule.type} of ${formatMoney(rule.amount, c.get('book').currency)}`,
+      summary: `removed a repeating ${rule.type} of ${formatMoney(rule.amount, c.get('book').currency)}`,
     });
     return c.body(null, 204);
   })
 
   .get('/recurring/due', async (c) => {
-    const month = parse(monthSchema, c.req.query('month') ?? currentAppMonth());
+    const month = parse(monthSchema, c.req.query('month') ?? currentPeriod(calendarOf(c.get('book'))));
     const db = c.get('db');
     const due = await dueIn(db, c.get('book'), month);
-    const dtos = await toRecurringDTOs(db, due.map((d) => d.rule));
+    const dtos = await toRecurringDTOs(db, c.get('book'), due.map((d) => d.rule));
     const result: RecurringDueDTO = { month, items: due.map((d, i) => ({ recurring: dtos[i]!, date: d.date })) };
     return c.json(result);
   })
@@ -260,19 +282,20 @@ export const recurringRoutes = new Hono<AppEnv>()
     const db = c.get('db');
     const book = c.get('book');
     const rule = await findRule(db, book._id, c.req.param('id'));
-    const today = todayInAppZone();
-    if (month < rule.startMonth || month > today.slice(0, 7)) throw badRequest("It isn't due that month");
+    const calendar = calendarOf(book);
+    const today = todayIn(calendar.timeZone);
+    if (!isDueIn(rule, month) || month > currentPeriod(calendar)) throw badRequest("It isn't due that month");
     const already = await db.transactions.findOne({
       bookId: book._id,
       recurringId: rule._id,
       deletedAt: { $exists: false },
-      date: monthRange(month),
+      date: monthRange(month, calendar.startDay),
     });
     if (already) return c.json({ added: 0 });
     if (!(await db.categories.findOne({ _id: rule.categoryId, archived: false }))) {
       throw badRequest('Its category is hidden. Unhide it or change the entry first.');
     }
-    const due = recurringDate(month, rule.dayOfMonth);
+    const due = occurrenceIn(month, rule.dayOfMonth, calendar.startDay);
     const date = due > today ? today : due;
     const added = await addFromRule(db, book._id, rule, month, date, c.get('userId'));
     if (rule.skippedMonths.includes(month)) await db.recurring.updateOne({ _id: rule._id }, { $pull: { skippedMonths: month } });

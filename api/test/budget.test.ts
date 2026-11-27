@@ -86,7 +86,7 @@ describe('planning a month', () => {
     const fuel = cats.find((c) => c.name === 'Fuel & Transport')!.id;
     await spend(fuel, 700);
     const b = (await api<BudgetDTO>('GET', `/books/${bookId}/budget/2026-10`, { token: owner.accessToken })).body;
-    expect(b.unbudgeted).toEqual([{ categoryId: fuel, group: 'spending', spent: rs(700) }]);
+    expect(b.unbudgeted).toEqual([{ categoryId: fuel, group: 'spending', section: 'spending', spent: rs(700) }]);
     expect(b.totals.projectedSavings).toBe(rs(4300));
   });
 

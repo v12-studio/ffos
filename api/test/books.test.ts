@@ -245,3 +245,35 @@ describe('member management', () => {
     expect((await api('GET', `/books/${bookId}/activity`, { token: m.viewer.accessToken })).status).toBe(403);
   });
 });
+
+describe('deleting and restoring a book', () => {
+  it('the owner can restore a deleted book, with its entries, for 30 days', async () => {
+    await txn(owner.accessToken);
+    expect((await api('DELETE', `/books/${bookId}`, { token: owner.accessToken })).status).toBe(204);
+    expect((await api('GET', `/books/${bookId}`, { token: owner.accessToken })).status).toBe(404);
+
+    const deleted = await api('GET', '/books/deleted', { token: owner.accessToken });
+    expect(deleted.body).toHaveLength(1);
+    expect(deleted.body[0]).toMatchObject({ id: bookId, name: 'Home' });
+
+    // Members can't restore it, or even see it.
+    expect((await api('GET', '/books/deleted', { token: m.admin.accessToken })).body).toEqual([]);
+    expect((await api('POST', `/books/${bookId}/restore`, { token: m.admin.accessToken })).status).toBe(404);
+
+    const restored = await api('POST', `/books/${bookId}/restore`, { token: owner.accessToken });
+    expect(restored.status).toBe(200);
+    expect(restored.body).toMatchObject({ id: bookId, role: 'owner', memberCount: 5 });
+    const list = await api('GET', `/books/${bookId}/transactions?month=2026-09`, { token: owner.accessToken });
+    expect(list.body).toHaveLength(1);
+  });
+
+  it('not after 30 days', async () => {
+    await api('DELETE', `/books/${bookId}`, { token: owner.accessToken });
+    const { collections } = await import('../src/db.ts');
+    const db = await collections();
+    const { ObjectId } = await import('mongodb');
+    await db.books.updateOne({ _id: new ObjectId(bookId) }, { $set: { deletedAt: new Date(Date.now() - 31 * 86_400_000) } });
+    expect((await api('GET', '/books/deleted', { token: owner.accessToken })).body).toEqual([]);
+    expect((await api('POST', `/books/${bookId}/restore`, { token: owner.accessToken })).status).toBe(404);
+  });
+});

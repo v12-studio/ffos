@@ -3,27 +3,31 @@ import { ObjectId } from 'mongodb';
 import {
   budgetCopySchema,
   budgetSaveSchema,
-  currentAppMonth,
-  daysInMonth,
+  currentPeriod,
+  dayOfPeriod,
   formatMoney,
   groupOrderSchema,
-  HEAD_GROUP_LABELS,
+  isDueIn,
   monthSchema,
-  normalizeGroupOrder,
-  recurringDate,
+  occurrenceIn,
+  periodExpression,
+  periodLength,
+  periodRange,
+  sectionFor,
+  sectionsSaveSchema,
   shiftMonthKey,
-  todayInAppZone,
+  todayIn,
   type BudgetDTO,
   type BudgetLineDTO,
   type BudgetSuggestionsDTO,
   type HeadGroup,
 } from '@ffos/shared';
 import type { AppEnv } from '../context.ts';
-import type { BookDoc, BudgetDoc, Collections } from '../db.ts';
-import { logActivity } from '../lib/books.ts';
+import type { BookDoc, BudgetDoc, CategoryDoc, Collections } from '../db.ts';
+import { calendarOf, logActivity, sectionsOf } from '../lib/books.ts';
 import { badRequest, conflict, isDuplicateKey, notFound, parse } from '../lib/errors.ts';
 import { requirePermission } from '../middleware/book.ts';
-import { headGroupOf, monthRange } from './ledger.ts';
+import { monthRange } from './ledger.ts';
 
 // Mounted under /books/:bookId after requireBook. Everyone in the book can view the budget;
 // planning it needs budget.manage (owner, admin, editor).
@@ -72,7 +76,7 @@ async function planFor(db: Collections, book: BookDoc, month: string, userId?: O
   );
   const lines = previous.lines.filter((l) => live.has(l.categoryId.toHexString()));
 
-  if (userId && month === currentAppMonth()) {
+  if (userId && month === currentPeriod(calendarOf(book))) {
     const now = new Date();
     try {
       await db.budgets.insertOne({
@@ -98,9 +102,61 @@ async function planFor(db: Collections, book: BookDoc, month: string, userId?: O
   return { income: previous.income, lines, version: 0, saved: false, carriedFrom: previous.month };
 }
 
+/** How far back carried-over money is followed. */
+const ROLLOVER_MONTHS = 24;
+
+/**
+ * What each rollover category brings into `month`: month by month since rollover was turned on, what was
+ * planned plus what came in, minus what was spent. A month where it wasn't in the plan starts it afresh.
+ */
+async function rolloverInto(db: Collections, book: BookDoc, month: string, ids: string[], categories: Map<string, CategoryDoc>) {
+  const out = new Map<string, number>();
+  if (!ids.length) return out;
+  const { startDay } = calendarOf(book);
+  const earliest = ids.map((id) => categories.get(id)!.rolloverFrom!).sort()[0]!;
+  const start = earliest > shiftMonthKey(month, -ROLLOVER_MONTHS) ? earliest : shiftMonthKey(month, -ROLLOVER_MONTHS);
+  const months: string[] = [];
+  for (let m = start; m < month; m = shiftMonthKey(m, 1)) months.push(m);
+  if (!months.length) return out;
+  const objectIds = ids.map((id) => new ObjectId(id));
+  const [plans, spent] = await Promise.all([
+    db.budgets.find({ bookId: book._id, month: { $lt: month } }, { projection: { month: 1, lines: 1 } }).sort({ month: 1 }).toArray(),
+    db.transactions
+      .aggregate<{ _id: { categoryId: ObjectId; month: string }; total: number }>([
+        {
+          $match: {
+            bookId: book._id,
+            deletedAt: { $exists: false },
+            type: 'expense',
+            categoryId: { $in: objectIds },
+            date: { $gte: periodRange(months[0]!, startDay).from, $lte: periodRange(months.at(-1)!, startDay).to },
+          },
+        },
+        { $group: { _id: { categoryId: '$categoryId', month: periodExpression(startDay) }, total: { $sum: '$amount' } } },
+      ])
+      .toArray(),
+  ]);
+  const spentIn = new Map(spent.map((r) => [`${r._id.categoryId.toHexString()}|${r._id.month}`, r.total]));
+  // The plan in force each month: its own, or the latest earlier one it carried over from.
+  const planIn = (m: string) => [...plans].reverse().find((p) => p.month <= m);
+  for (const id of ids) {
+    const from = categories.get(id)!.rolloverFrom!;
+    let carry = 0;
+    for (const m of months) {
+      if (m < from) continue;
+      const line = planIn(m)?.lines.find((l) => l.categoryId.toHexString() === id);
+      carry = line ? line.planned + carry - (spentIn.get(`${id}|${m}`) ?? 0) : 0;
+    }
+    out.set(id, carry);
+  }
+  return out;
+}
+
 /** `userId` is the person viewing; with it, opening the current month on a carried plan saves it for the month. */
 export async function computeBudget(db: Collections, book: BookDoc, month: string, userId?: ObjectId): Promise<BudgetDTO> {
-  const match = { bookId: book._id, deletedAt: { $exists: false }, date: monthRange(month) };
+  const calendar = calendarOf(book);
+  const range = periodRange(month, calendar.startDay);
+  const match = { bookId: book._id, deletedAt: { $exists: false }, date: monthRange(month, calendar.startDay) };
   const [plan, spentRows, incomeRows, categories] = await Promise.all([
     planFor(db, book, month, userId),
     db.transactions
@@ -115,14 +171,13 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
         { $group: { _id: null, total: { $sum: '$amount' } } },
       ])
       .toArray(),
-    db.categories.find({ bookId: book._id, kind: 'expense' }, { projection: { name: 1, group: 1, goal: 1 } }).toArray(),
+    db.categories.find({ bookId: book._id, kind: 'expense' }, { projection: { name: 1, group: 1, goal: 1, rollover: 1, rolloverFrom: 1 } }).toArray(),
   ]);
 
   const categoryById = new Map(categories.map((cat) => [cat._id.toHexString(), cat]));
-  const groupOf = (id: string): HeadGroup => {
-    const cat = categoryById.get(id);
-    return cat ? headGroupOf(cat) : 'spending';
-  };
+  const sections = sectionsOf(book);
+  const sectionOf = (id: string) => sectionFor(categoryById.get(id) ?? { name: '' }, sections);
+  const groupOf = (id: string): HeadGroup => sectionOf(id).kind;
   const planLines = plan?.lines ?? [];
   const lineIds = planLines.map((l) => l.categoryId);
 
@@ -131,6 +186,7 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
     ? await db.recurring
         .find({ bookId: book._id, type: 'expense', active: true, categoryId: { $in: lineIds }, startMonth: { $lte: month }, skippedMonths: { $ne: month } })
         .toArray()
+        .then((list) => list.filter((r) => isDueIn(r, month)))
     : [];
   const addedRules = rules.length
     ? new Set(
@@ -139,7 +195,7 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
             bookId: book._id,
             recurringId: { $in: rules.map((r) => r._id) },
             deletedAt: { $exists: false },
-            date: monthRange(month),
+            date: monthRange(month, calendar.startDay),
           })
         ).map((id) => (id as ObjectId).toHexString()),
       )
@@ -150,18 +206,23 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
   const goalRows = goalIds.length
     ? await db.transactions
         .aggregate<{ _id: ObjectId; total: number; before: number }>([
-          { $match: { bookId: book._id, deletedAt: { $exists: false }, type: 'expense', categoryId: { $in: goalIds }, date: { $lte: `${month}-31` } } },
+          { $match: { bookId: book._id, deletedAt: { $exists: false }, type: 'expense', categoryId: { $in: goalIds }, date: { $lte: range.to } } },
           {
             $group: {
               _id: '$categoryId',
               total: { $sum: '$amount' },
-              before: { $sum: { $cond: [{ $lt: ['$date', `${month}-01`] }, '$amount', 0] } },
+              before: { $sum: { $cond: [{ $lt: ['$date', range.from] }, '$amount', 0] } },
             },
           },
         ])
         .toArray()
     : [];
   const goalTotals = new Map(goalRows.map((r) => [r._id.toHexString(), r]));
+
+  const carried = await rolloverInto(db, book, month, planLines.map((l) => l.categoryId.toHexString()).filter((id) => {
+    const cat = categoryById.get(id);
+    return cat?.rollover && cat.rolloverFrom && cat.rolloverFrom < month && groupOf(id) === 'spending';
+  }), categoryById);
 
   const spentBy = new Map(spentRows.map((r) => [r._id.toHexString(), r.total]));
   const income = plan?.income ?? 0;
@@ -172,7 +233,7 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
     const own = rules.filter((r) => r.categoryId.equals(l.categoryId));
     const due = own.length
       ? {
-          date: own.map((r) => recurringDate(month, r.dayOfMonth)).sort()[0]!,
+          date: own.map((r) => occurrenceIn(month, r.dayOfMonth, calendar.startDay)).sort()[0]!,
           recurringIds: own.map((r) => r._id.toHexString()),
           paid: own.every((r) => addedRules.has(r._id.toHexString())),
         }
@@ -190,13 +251,14 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
         monthlyNeeded: monthsLeft === null ? null : wholeUp(Math.max(0, goalDef.target - before) / Math.max(1, monthsLeft)),
       };
     }
-    return { categoryId: id, group, planned: l.planned, spent, remaining: l.planned - spent, due, goal };
+    const rolloverIn = carried.get(id) ?? 0;
+    return { categoryId: id, group, section: sectionOf(id).id, planned: l.planned, rolloverIn, spent, remaining: l.planned + rolloverIn - spent, due, goal };
   });
 
   const budgeted = new Set(lines.map((l) => l.categoryId));
   const unbudgeted = spentRows
     .filter((r) => !budgeted.has(r._id.toHexString()))
-    .map((r) => ({ categoryId: r._id.toHexString(), group: groupOf(r._id.toHexString()), spent: r.total }))
+    .map((r) => ({ categoryId: r._id.toHexString(), group: groupOf(r._id.toHexString()), section: sectionOf(r._id.toHexString()).id, spent: r.total }))
     .sort((a, b) => b.spent - a.spent);
 
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
@@ -206,9 +268,9 @@ export async function computeBudget(db: Collections, book: BookDoc, month: strin
   const savedRows = spentRows.filter((r) => groupOf(r._id.toHexString()) === 'savings');
 
   let today: BudgetDTO['today'] = null;
-  if (month === currentAppMonth()) {
-    const day = Number(todayInAppZone().slice(8, 10));
-    const total = daysInMonth(month);
+  if (month === currentPeriod(calendar)) {
+    const day = dayOfPeriod(todayIn(calendar.timeZone), calendar.startDay);
+    const total = periodLength(month, calendar.startDay);
     const daysLeft = total - day + 1;
     const spendingLeft = sum(lines.filter((l) => l.group === 'spending').map((l) => Math.max(0, l.remaining)));
     today = { day, daysInMonth: total, daysLeft, spendingLeft, safePerDay: wholeDown(spendingLeft / daysLeft) };
@@ -247,25 +309,62 @@ async function assertBudgetHeads(db: Collections, bookId: ObjectId, ids: string[
     kind: 'expense',
     archived: false,
   });
-  if (found !== ids.length) throw badRequest('Budget heads must be expense categories in this book');
+  if (found !== ids.length) throw badRequest('Only expense categories from this book can be in the budget');
 }
 
 export const budgetRoutes = new Hono<AppEnv>()
-  // The order the Budget tab lists its sections in, for everyone in the book.
-  .put('/budget-order', requirePermission('budget.manage'), async (c) => {
-    const { groups } = parse(groupOrderSchema, await c.req.json());
+  // The budget's sections: their names, how each is tracked, and their order, for everyone in the book.
+  // Categories in a section that's removed move to the first remaining section of the same kind.
+  .put('/budget-sections', requirePermission('budget.manage'), async (c) => {
+    const { sections } = parse(sectionsSaveSchema, await c.req.json());
     const db = c.get('db');
     const book = c.get('book');
-    const before = normalizeGroupOrder(book.groupOrder);
-    if (before.join() !== groups.join()) {
-      await db.books.updateOne({ _id: book._id }, { $set: { groupOrder: groups, updatedAt: new Date() } });
+    const before = sectionsOf(book);
+    const removed = before.filter((s) => !sections.some((n) => n.id === s.id));
+    const changedKind = before.filter((s) => sections.some((n) => n.id === s.id && n.kind !== s.kind));
+    await db.books.updateOne({ _id: book._id }, { $set: { sections, updatedAt: new Date() }, $unset: { groupOrder: '' } });
+    // A category's section may also be stored as a kind (older data) that no longer has a section by that id.
+    for (const gone of removed) {
+      const target = sections.find((s) => s.kind === gone.kind)!;
+      await db.categories.updateMany({ bookId: book._id, group: gone.id }, { $set: { group: target.id, updatedAt: new Date() } });
+    }
+    const summary: string[] = [];
+    const added = sections.filter((n) => !before.some((s) => s.id === n.id));
+    const renamed = sections.filter((n) => before.some((s) => s.id === n.id && s.name !== n.name));
+    if (added.length) summary.push(`added ${added.map((s) => s.name).join(', ')}`);
+    if (removed.length) summary.push(`removed ${removed.map((s) => s.name).join(', ')}`);
+    if (renamed.length) summary.push(`renamed ${renamed.map((n) => `${before.find((s) => s.id === n.id)!.name} to ${n.name}`).join(', ')}`);
+    if (changedKind.length) summary.push(`changed how ${changedKind.map((s) => s.name).join(', ')} ${changedKind.length === 1 ? 'is' : 'are'} tracked`);
+    if (!summary.length && before.map((s) => s.id).join() !== sections.map((s) => s.id).join()) summary.push('reordered them');
+    if (summary.length) {
       await logActivity(db, {
         bookId: book._id,
         userId: c.get('userId'),
         action: 'settings',
         entity: 'budget',
         entityId: book._id,
-        summary: `changed the budget section order to ${groups.map((g) => HEAD_GROUP_LABELS[g].name).join(', ')}`,
+        summary: `changed the budget sections: ${summary.join('; ')}`,
+      });
+    }
+    return c.json({ sections });
+  })
+
+  // Older app versions: put the kinds in this order (sections of the same kind keep their own order).
+  .put('/budget-order', requirePermission('budget.manage'), async (c) => {
+    const { groups } = parse(groupOrderSchema, await c.req.json());
+    const db = c.get('db');
+    const book = c.get('book');
+    const before = sectionsOf(book);
+    const sections = groups.flatMap((g) => before.filter((s) => s.kind === g));
+    if (before.map((s) => s.id).join() !== sections.map((s) => s.id).join()) {
+      await db.books.updateOne({ _id: book._id }, { $set: { sections, updatedAt: new Date() }, $unset: { groupOrder: '' } });
+      await logActivity(db, {
+        bookId: book._id,
+        userId: c.get('userId'),
+        action: 'settings',
+        entity: 'budget',
+        entityId: book._id,
+        summary: `changed the budget section order to ${sections.map((s) => s.name).join(', ')}`,
       });
     }
     return c.json({ groupOrder: groups });
@@ -324,7 +423,7 @@ export const budgetRoutes = new Hono<AppEnv>()
       summary: `${input.version === undefined ? 'planned' : 'updated'} the ${monthName(month)} budget: income ${formatMoney(
         input.income,
         book.currency,
-      )}, ${input.lines.length} budget head${input.lines.length === 1 ? '' : 's'}`,
+      )}, ${input.lines.length} categor${input.lines.length === 1 ? 'y' : 'ies'}`,
     });
     return c.json(await computeBudget(db, book, month));
   })
@@ -343,10 +442,10 @@ export const budgetRoutes = new Hono<AppEnv>()
             bookId: c.get('book')._id,
             deletedAt: { $exists: false },
             type: 'expense',
-            date: { $gte: `${months[0]}-01`, $lte: `${last}-31` },
+            date: { $gte: periodRange(months[0]!, calendarOf(c.get('book')).startDay).from, $lte: periodRange(last, calendarOf(c.get('book')).startDay).to },
           },
         },
-        { $group: { _id: { categoryId: '$categoryId', month: { $substrBytes: ['$date', 0, 7] } }, total: { $sum: '$amount' } } },
+        { $group: { _id: { categoryId: '$categoryId', month: periodExpression(calendarOf(c.get('book')).startDay) }, total: { $sum: '$amount' } } },
       ])
       .toArray();
     const activeMonths = Math.max(1, new Set(rows.map((r) => r._id.month)).size);

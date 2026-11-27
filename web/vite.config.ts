@@ -46,6 +46,8 @@ export default defineConfig({
         // Inter ships a file per script; only Latin is needed up front (others still load on demand when online).
         globIgnores: ['**/inter-{cyrillic,cyrillic-ext,greek,greek-ext,vietnamese}-*.woff2'],
         navigateFallback: 'index.html',
+        // Reminder notifications: push and notification-tap handlers (public/push-sw.js).
+        importScripts: ['push-sw.js'],
       },
     }),
   ],
